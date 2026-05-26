@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 import sys
 from typing import List
@@ -15,6 +16,20 @@ from dvp_meeting_prep.query import fetch_all_sources_for_advisor
 from dvp_meeting_prep.prompting import build_meeting_prep_prompt
 from dvp_meeting_prep.llm import generate_meeting_prep
 from dvp_meeting_prep.config import get_settings
+
+
+def _slugify_filename(value: str) -> str:
+    slug = []
+    previous_was_separator = False
+    for char in value.lower():
+        if char.isalnum():
+            slug.append(char)
+            previous_was_separator = False
+        elif not previous_was_separator:
+            slug.append("_")
+            previous_was_separator = True
+    text = "".join(slug).strip("_")
+    return text or "advisor"
 
 
 def sample_advisors(client, limit: int = 5) -> List[str]:
@@ -50,7 +65,23 @@ def choose_name(examples: List[str]) -> str:
     return choice
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Interactive advisor meeting-prep helper.")
+    parser.add_argument(
+        "--query-output",
+        default="query_output.txt",
+        help="Path to save fetched query results as formatted JSON text.",
+    )
+    parser.add_argument(
+        "--prompt-output",
+        default="prompt_output.txt",
+        help="Path to save the full generated prompt text.",
+    )
+    return parser
+
+
 def main() -> None:
+    args = build_parser().parse_args()
     client = get_supabase_client()
     examples = sample_advisors(client, limit=5)
     advisor_name = choose_name(examples)
@@ -62,9 +93,23 @@ def main() -> None:
         print(f"\n== {table_name} ({len(rows)} rows) ==")
         print(pretty_json(rows[:5]))
 
+    output_path = Path(args.query_output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_payload = {
+        "advisor_name": advisor_name,
+        "source_results": source_results,
+    }
+    output_path.write_text(pretty_json(output_payload), encoding="utf-8")
+    print(f"\nSaved full query output to: {output_path}")
+
     prompt = build_meeting_prep_prompt(advisor_name, source_results)
+    prompt_output_path = Path(args.prompt_output)
+    prompt_output_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_output_path.write_text(prompt, encoding="utf-8")
+
     print("\n== Prompt Preview ==")
     print(prompt[:2000])
+    print(f"\nSaved full prompt to: {prompt_output_path}")
 
     do_generate = input("Call OpenAI to generate meeting prep now? [y/N]: ").strip().lower() == "y"
     if not do_generate:
@@ -78,8 +123,13 @@ def main() -> None:
         print("Prompt was:\n", prompt)
         return
 
+    default_output_path = Path("output") / f"{_slugify_filename(advisor_name)}_meeting_prep.md"
+    default_output_path.parent.mkdir(parents=True, exist_ok=True)
+    default_output_path.write_text(content, encoding="utf-8")
+
     print("\n== Meeting Prep ==\n")
     print(content)
+    print(f"\nSaved Markdown meeting prep to: {default_output_path}")
 
     save = input("Save to file? (path or leave empty): ").strip()
     if save:

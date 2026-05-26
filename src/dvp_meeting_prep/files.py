@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 
 def _normalize_header(header: Any) -> str:
@@ -52,6 +53,35 @@ def _to_int(value: Any) -> int | None:
     return int(number)
 
 
+def _to_bool(value: Any) -> bool | None:
+    cleaned = _clean_value(value)
+    if cleaned is None:
+        return None
+    lowered = str(cleaned).strip().lower()
+    if lowered in {"yes", "y", "true", "1"}:
+        return True
+    if lowered in {"no", "n", "false", "0"}:
+        return False
+    return None
+
+
+def _to_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    cleaned = _clean_value(value)
+    if cleaned is None:
+        return None
+    text = str(cleaned)
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%B %d, %Y", "%b %d, %Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
 def _is_blank_row(row: list[Any]) -> bool:
     return all(_clean_value(value) is None for value in row)
 
@@ -91,6 +121,329 @@ def _row_payload(headers: list[Any], row: list[Any]) -> list[dict[str, Any]]:
             }
         )
     return payload
+
+
+def _forward_fill_headers(values: list[Any]) -> list[str | None]:
+    filled: list[str | None] = []
+    last: str | None = None
+    for value in values:
+        cleaned = _clean_value(value)
+        if cleaned is not None:
+            last = str(cleaned)
+        filled.append(last)
+    return filled
+
+
+def _dedup_parts(parts: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for part in parts:
+        if not deduped or deduped[-1] != part:
+            deduped.append(part)
+    return deduped
+
+
+def _build_consultant_header_map(rows: list[list[Any]], header_index: int, headers_en: list[Any]) -> list[dict[str, Any]]:
+    row1 = list(rows[0]) if len(rows) > 0 else []
+    row2 = list(rows[1]) if len(rows) > 1 else []
+    row4 = list(rows[header_index + 1]) if len(rows) > header_index + 1 else []
+
+    size = len(headers_en)
+    while len(row1) < size:
+        row1.append(None)
+    while len(row2) < size:
+        row2.append(None)
+    while len(row4) < size:
+        row4.append(None)
+
+    ff1 = _forward_fill_headers(row1)
+    ff2 = _forward_fill_headers(row2)
+
+    static_headers = {
+        _normalize_header("Advisor#"),
+        _normalize_header("Advisor"),
+        _normalize_header("Area"),
+        _normalize_header("RO#"),
+        _normalize_header("Region"),
+        _normalize_header("Div"),
+        _normalize_header("Base Achievement Level"),
+        _normalize_header("ETF Completed & Approved"),
+        _normalize_header("Designation"),
+        _normalize_header("Sales Start Date"),
+        _normalize_header("Termination Date"),
+        _normalize_header("Tenure Category"),
+        _normalize_header("PWM Indicator"),
+        _normalize_header("Dealer Code"),
+        _normalize_header("Insurance Expiry Date"),
+    }
+
+    header_map: list[dict[str, Any]] = []
+    for i in range(size):
+        h_en = _clean_value(headers_en[i] if i < len(headers_en) else None)
+        h_fr = _clean_value(row4[i] if i < len(row4) else None)
+        g1 = _clean_value(ff1[i] if i < len(ff1) else None)
+        g2 = _clean_value(ff2[i] if i < len(ff2) else None)
+
+        g1_norm = _normalize_header(g1)
+        if g1_norm == _normalize_header("Monthly Advisor Detail Report / Rapport détaillé des conseillers mensuel"):
+            g1 = None
+
+        leaf_norm = _normalize_header(h_en)
+        is_metric = bool(h_en) and leaf_norm not in static_headers
+
+        parts = [part for part in [g1, g2, h_en] if part]
+        parts = _dedup_parts(parts)
+        metric_key = _normalize_header("__".join(parts)) if is_metric else None
+
+        header_map.append(
+            {
+                "column_index": i + 1,
+                "group_level_1": g1,
+                "group_level_2": g2,
+                "header_en": h_en,
+                "header_fr": h_fr,
+                "is_metric": is_metric,
+                "metric_key": metric_key,
+                "metric_label": " > ".join(parts) if is_metric else h_en,
+            }
+        )
+
+    return header_map
+
+
+SCORECARD_LAST_COL_INDEX = 84  # A:CF
+
+
+def _scorecard_group_from_column(column_index: int) -> str:
+    if 16 <= column_index <= 35:
+        return "Net Contributions"
+    if 36 <= column_index <= 41:
+        return "New Business"
+    if 42 <= column_index <= 45:
+        return "New Business Detail"
+    if 46 <= column_index <= 51:
+        return "First Year Commission Insurance"
+    if 52 <= column_index <= 58:
+        return "Mortgage / HEP"
+    if column_index == 59:
+        return "Key Driver Score"
+    if 60 <= column_index <= 66:
+        return "Client"
+    if 67 <= column_index <= 69:
+        return "Growth"
+    if column_index == 70:
+        return "Family Group"
+    if 71 <= column_index <= 84:
+        return "Assets"
+    return "Advisor Profile"
+
+
+def _normalize_period_label(label: Any) -> str | None:
+    cleaned = _clean_value(label)
+    if cleaned is None:
+        return None
+    text = _normalize_header(cleaned)
+    if "rolling_12" in text or "12_derniers_mois" in text:
+        return "Rolling 12"
+    if "month" in text or "mois" in text:
+        return "Month"
+    if "ytd" in text or "dda" in text:
+        return "YTD"
+    return str(cleaned)
+
+
+def _safe_numeric(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    cleaned = _clean_value(value)
+    if cleaned is None:
+        return None
+    text = str(cleaned).replace(",", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _parse_report_date(raw: Any) -> str:
+    cleaned = _clean_value(raw)
+    if cleaned is None:
+        raise RuntimeError("Could not parse consultant scorecard report date from A2.")
+    head = str(cleaned).split("/")[0].strip()
+    parsed = _to_date(head)
+    if parsed is None:
+        raise RuntimeError(f"Could not parse consultant scorecard report date from value: {cleaned}")
+    return parsed
+
+
+def parse_consultant_scorecard(path: str | Path) -> dict[str, Any]:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    sheet = None
+    for candidate in workbook.worksheets:
+        if "advisor detail" in candidate.title.lower():
+            sheet = candidate
+            break
+    if sheet is None:
+        raise RuntimeError("Could not find consultant scorecard worksheet containing 'Advisor Detail'.")
+
+    all_rows = list(sheet.iter_rows(values_only=True))
+    if not all_rows:
+        return {
+            "sheet_name": sheet.title,
+            "report_date": None,
+            "header_rows": {"major": 1, "period": 2, "english": 3, "french": 4},
+            "raw_rows": [],
+            "monthly_rows": [],
+            "metric_rows": [],
+        }
+
+    rows = [list(row[:SCORECARD_LAST_COL_INDEX]) for row in all_rows]
+    report_date = _parse_report_date(rows[1][0] if len(rows) > 1 and len(rows[1]) > 0 else None)
+    headers_major = rows[0] if len(rows) > 0 else []
+    headers_period = rows[1] if len(rows) > 1 else []
+    headers_english = rows[2] if len(rows) > 2 else []
+    headers_french = rows[3] if len(rows) > 3 else []
+
+    while len(headers_major) < SCORECARD_LAST_COL_INDEX:
+        headers_major.append(None)
+    while len(headers_period) < SCORECARD_LAST_COL_INDEX:
+        headers_period.append(None)
+    while len(headers_english) < SCORECARD_LAST_COL_INDEX:
+        headers_english.append(None)
+    while len(headers_french) < SCORECARD_LAST_COL_INDEX:
+        headers_french.append(None)
+
+    ff_major = _forward_fill_headers(headers_major)
+    ff_period = _forward_fill_headers(headers_period)
+
+    raw_rows: list[dict[str, Any]] = []
+    monthly_rows: list[dict[str, Any]] = []
+    metric_rows: list[dict[str, Any]] = []
+
+    for row_number, row in enumerate(rows[4:], start=5):
+        if len(row) < SCORECARD_LAST_COL_INDEX:
+            row = row + [None] * (SCORECARD_LAST_COL_INDEX - len(row))
+
+        advisor_number = _to_number(row[0])
+        if advisor_number is None:
+            break
+
+        advisor_name = _clean_value(row[1])
+        if advisor_name is None:
+            continue
+
+        monthly = {
+            "source_file": Path(path).name,
+            "report_date": report_date,
+            "source_row_number": row_number,
+            "advisor_number": advisor_number,
+            "advisor_name": advisor_name,
+            "area": _clean_value(row[2]),
+            "ro_number": _to_int(row[3]),
+            "region": _clean_value(row[4]),
+            "division": _to_int(row[5]),
+            "base_achievement_level": _clean_value(row[6]),
+            "etf_completed_approved": _to_bool(row[7]),
+            "designation": _clean_value(row[8]),
+            "sales_start_date": _to_date(row[9]),
+            "termination_date": _to_date(row[10]),
+            "tenure_category": _clean_value(row[11]),
+            "pwm_indicator": _to_bool(row[12]),
+            "dealer_code": _clean_value(row[13]),
+            "insurance_expiry_date": _to_date(row[14]),
+            "key_driver_score": _safe_numeric(row[58]),
+            "raw_payload": None,
+        }
+
+        row_payload: dict[str, Any] = {}
+        metrics_for_payload: list[dict[str, Any]] = []
+
+        for col_idx in range(1, SCORECARD_LAST_COL_INDEX + 1):
+            value = row[col_idx - 1]
+            cleaned = _clean_value(value)
+            if cleaned is None:
+                continue
+
+            group_name = _scorecard_group_from_column(col_idx)
+            period_name = _normalize_period_label(ff_period[col_idx - 1])
+            header_en = _clean_value(headers_english[col_idx - 1])
+            header_fr = _clean_value(headers_french[col_idx - 1])
+            metric_name = header_en or f"Column {get_column_letter(col_idx)}"
+
+            if col_idx <= 15:
+                key = _normalize_header(metric_name)
+                if key:
+                    row_payload[key] = cleaned
+                continue
+
+            value_numeric = _safe_numeric(value)
+            value_date = _to_date(value)
+            value_text = None if value_numeric is not None or value_date is not None else cleaned
+            unit = "percent" if "%" in (metric_name or "") else None
+
+            metric_row = {
+                "advisor_number": advisor_number,
+                "source_row_number": row_number,
+                "source_column": get_column_letter(col_idx),
+                "metric_group": group_name,
+                "metric_period": period_name,
+                "metric_name": metric_name,
+                "value_numeric": value_numeric,
+                "value_text": value_text,
+                "value_date": value_date,
+                "unit": unit,
+                "french_label": header_fr,
+            }
+            metric_rows.append(metric_row)
+            metrics_for_payload.append(metric_row)
+
+        raw_payload = {
+            "report_date": report_date,
+            "advisor": {
+                "advisor_number": monthly["advisor_number"],
+                "advisor_name": monthly["advisor_name"],
+                "area": monthly["area"],
+                "ro_number": monthly["ro_number"],
+                "region": monthly["region"],
+                "division": monthly["division"],
+                "base_achievement_level": monthly["base_achievement_level"],
+                "etf_completed_approved": monthly["etf_completed_approved"],
+                "designation": monthly["designation"],
+                "sales_start_date": monthly["sales_start_date"],
+                "termination_date": monthly["termination_date"],
+                "tenure_category": monthly["tenure_category"],
+                "pwm_indicator": monthly["pwm_indicator"],
+                "dealer_code": monthly["dealer_code"],
+                "insurance_expiry_date": monthly["insurance_expiry_date"],
+            },
+            "profile_values": row_payload,
+            "metrics": metrics_for_payload,
+        }
+
+        raw_rows.append(
+            {
+                "source_file": Path(path).name,
+                "sheet_name": sheet.title,
+                "report_date": report_date,
+                "source_row_number": row_number,
+                "advisor_number": advisor_number,
+                "advisor_name": advisor_name,
+                "raw_payload": raw_payload,
+            }
+        )
+
+        monthly["raw_payload"] = raw_payload
+        monthly_rows.append(monthly)
+
+    return {
+        "sheet_name": sheet.title,
+        "report_date": report_date,
+        "header_rows": {"major": 1, "period": 2, "english": 3, "french": 4},
+        "raw_rows": raw_rows,
+        "monthly_rows": monthly_rows,
+        "metric_rows": metric_rows,
+    }
 
 
 def read_salesforce_rows(path: str | Path) -> list[dict[str, Any]]:
@@ -187,59 +540,34 @@ def read_tableau_rows(path: str | Path) -> list[dict[str, Any]]:
 
 
 def read_consultant_scorecard_rows(path: str | Path) -> list[dict[str, Any]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
-    sheet = None
-    for candidate in workbook.worksheets:
-        if "advisor detail" in candidate.title.lower():
-            sheet = candidate
-            break
-    if sheet is None:
-        sheet = next((candidate for candidate in workbook.worksheets if candidate.title.lower() != "reference"), workbook.worksheets[0])
-
-    rows = list(sheet.iter_rows(values_only=True))
-    header_index, headers = _find_header_row(rows, {"advisor", "advisor#", "area", "region"})
-
+    structured = parse_consultant_scorecard(path)
     parsed: list[dict[str, Any]] = []
-    for row in rows[header_index + 1 :]:
-        row_list = list(row)
-        if _is_blank_row(row_list):
-            continue
-
-        first_value = _clean_value(row_list[0] if row_list else None)
-        if first_value is None or not re.fullmatch(r"\d+", first_value):
-            continue
-
-        raw_payload = _row_payload(headers, row_list)
-        advisor_name = _find_value_by_header(headers, row_list, "Advisor", exact=True)
-        if advisor_name is None:
-            continue
-
+    for row in structured["monthly_rows"]:
         parsed.append(
             {
-                "advisor_name": advisor_name,
-                "advisor_number": _to_number(_find_value_by_header(headers, row_list, "Advisor#", exact=True)),
-                "area": _find_value_by_header(headers, row_list, "Area", exact=True),
-                "ro_number": _find_value_by_header(headers, row_list, "RO#", exact=True),
-                "region": _find_value_by_header(headers, row_list, "Region", exact=True),
-                "division": _find_value_by_header(headers, row_list, "Div", exact=True),
-                "base_achievement_level": _find_value_by_header(headers, row_list, "Base Achievement Level", exact=True),
-                "etf_completed_and_approved": _find_value_by_header(headers, row_list, "ETF Completed & Approved", exact=True),
-                "designation": _find_value_by_header(headers, row_list, "Designation", exact=True),
-                "sales_start_date": _find_value_by_header(headers, row_list, "Sales Start Date", exact=True),
-                "termination_date": _find_value_by_header(headers, row_list, "Termination Date", exact=True),
-                "tenure_category": _find_value_by_header(headers, row_list, "Tenure Category", exact=True),
-                "pwm_indicator": _find_value_by_header(headers, row_list, "PWM Indicator", exact=True),
-                "dealer_code": _find_value_by_header(headers, row_list, "Dealer Code", exact=True),
-                "insurance_expiry_date": _find_value_by_header(headers, row_list, "Insurance Expiry Date", exact=True),
-                "key_driver_score": _find_value_by_header(headers, row_list, "Key Driver Score\n(5)", exact=True),
-                "client_bp_count": _find_value_by_header(headers, row_list, "Client BP Count", exact=True),
-                "assets_under_management": _find_value_by_header(headers, row_list, "Assets under Management (AUM)", exact=True),
-                "third_party_assets": _find_value_by_header(headers, row_list, "Third Party Assets (MF, HISA, ETFs)", exact=True),
-                "assets_under_administration": _find_value_by_header(headers, row_list, "Assets under Administration (AUA)", exact=True),
-                "raw_payload": raw_payload,
+                "advisor_name": row.get("advisor_name"),
+                "advisor_number": row.get("advisor_number"),
+                "area": row.get("area"),
+                "ro_number": row.get("ro_number"),
+                "region": row.get("region"),
+                "division": row.get("division"),
+                "base_achievement_level": row.get("base_achievement_level"),
+                "etf_completed_and_approved": row.get("etf_completed_approved"),
+                "designation": row.get("designation"),
+                "sales_start_date": row.get("sales_start_date"),
+                "termination_date": row.get("termination_date"),
+                "tenure_category": row.get("tenure_category"),
+                "pwm_indicator": row.get("pwm_indicator"),
+                "dealer_code": row.get("dealer_code"),
+                "insurance_expiry_date": row.get("insurance_expiry_date"),
+                "key_driver_score": row.get("key_driver_score"),
+                "client_bp_count": None,
+                "assets_under_management": None,
+                "third_party_assets": None,
+                "assets_under_administration": None,
+                "raw_payload": row.get("raw_payload"),
             }
         )
-
     return parsed
 
 

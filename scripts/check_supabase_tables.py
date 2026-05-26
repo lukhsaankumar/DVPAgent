@@ -19,6 +19,9 @@ def main():
         'salesforce_data',
         'tableau_data',
         'consultant_scorecard_data',
+        'consultant_scorecard_raw',
+        'consultant_scorecard_monthly',
+        'consultant_scorecard_metric',
         'meeting_prep_documents',
     ]
 

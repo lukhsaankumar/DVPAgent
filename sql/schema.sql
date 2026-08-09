@@ -175,3 +175,36 @@ create table if not exists public.meeting_prep_documents (
   response text not null,
   created_at timestamptz not null default now()
 );
+
+create index if not exists meeting_prep_documents_advisor_name_idx
+  on public.meeting_prep_documents (advisor_name);
+
+-- Dedup support for UI-driven uploads: each row's content is hashed so a
+-- re-uploaded file (or overlapping export) upserts instead of duplicating.
+alter table public.tableau_data
+  add column if not exists content_hash text;
+
+create unique index if not exists tableau_data_content_hash_idx
+  on public.tableau_data (content_hash);
+
+alter table public.consultant_scorecard_raw
+  add column if not exists content_hash text;
+
+create unique index if not exists consultant_scorecard_raw_content_hash_idx
+  on public.consultant_scorecard_raw (content_hash);
+
+-- Audit log for uploads made through the /upload UI.
+create table if not exists public.upload_batches (
+  id bigint generated always as identity primary key,
+  source_type text not null check (source_type in ('tableau', 'consultant_scorecard')),
+  file_name text not null,
+  rows_parsed integer not null default 0,
+  rows_inserted integer not null default 0,
+  rows_skipped_duplicate integer not null default 0,
+  status text not null default 'success' check (status in ('success', 'error')),
+  error_message text,
+  uploaded_at timestamptz not null default now()
+);
+
+create index if not exists upload_batches_uploaded_at_idx
+  on public.upload_batches (uploaded_at desc);

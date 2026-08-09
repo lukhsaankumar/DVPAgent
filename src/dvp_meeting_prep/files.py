@@ -277,8 +277,24 @@ def _parse_report_date(raw: Any) -> str:
     return parsed
 
 
-def parse_consultant_scorecard(path: str | Path) -> dict[str, Any]:
+def parse_consultant_scorecard(path: str | Path, *, source_file_name: str | None = None) -> dict[str, Any]:
+    """Parse a consultant scorecard workbook.
+
+    `source_file_name` overrides the recorded source_file value. This matters
+    for uploads: the on-disk path is a randomly named temp file, and using
+    that name would make the same logical file hash differently on every
+    upload, defeating dedup.
+    """
     workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        return _parse_consultant_scorecard_workbook(workbook, source_file_name or Path(path).name)
+    finally:
+        # read_only workbooks keep the underlying zip file handle open until
+        # closed, which on Windows blocks deleting/replacing the source file.
+        workbook.close()
+
+
+def _parse_consultant_scorecard_workbook(workbook: Any, source_file_name: str) -> dict[str, Any]:
     sheet = None
     for candidate in workbook.worksheets:
         if "advisor detail" in candidate.title.lower():
@@ -314,7 +330,6 @@ def parse_consultant_scorecard(path: str | Path) -> dict[str, Any]:
     while len(headers_french) < SCORECARD_LAST_COL_INDEX:
         headers_french.append(None)
 
-    ff_major = _forward_fill_headers(headers_major)
     ff_period = _forward_fill_headers(headers_period)
 
     raw_rows: list[dict[str, Any]] = []
@@ -334,7 +349,7 @@ def parse_consultant_scorecard(path: str | Path) -> dict[str, Any]:
             continue
 
         monthly = {
-            "source_file": Path(path).name,
+            "source_file": source_file_name,
             "report_date": report_date,
             "source_row_number": row_number,
             "advisor_number": advisor_number,
@@ -423,7 +438,7 @@ def parse_consultant_scorecard(path: str | Path) -> dict[str, Any]:
 
         raw_rows.append(
             {
-                "source_file": Path(path).name,
+                "source_file": source_file_name,
                 "sheet_name": sheet.title,
                 "report_date": report_date,
                 "source_row_number": row_number,
@@ -448,6 +463,13 @@ def parse_consultant_scorecard(path: str | Path) -> dict[str, Any]:
 
 def read_salesforce_rows(path: str | Path) -> list[dict[str, Any]]:
     workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        return _read_salesforce_workbook(workbook)
+    finally:
+        workbook.close()
+
+
+def _read_salesforce_workbook(workbook: Any) -> list[dict[str, Any]]:
     sheet = None
     for candidate in workbook.worksheets:
         if "ws team crm history" in candidate.title.lower():
@@ -573,4 +595,18 @@ def read_consultant_scorecard_rows(path: str | Path) -> list[dict[str, Any]]:
 
 def pretty_json(value: Any) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+
+
+def slugify_filename(value: str) -> str:
+    slug: list[str] = []
+    previous_was_separator = False
+    for char in value.lower():
+        if char.isalnum():
+            slug.append(char)
+            previous_was_separator = False
+        elif not previous_was_separator:
+            slug.append("_")
+            previous_was_separator = True
+    text = "".join(slug).strip("_")
+    return text or "advisor"
 

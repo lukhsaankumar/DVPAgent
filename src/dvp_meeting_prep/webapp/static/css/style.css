@@ -1,0 +1,339 @@
+:root {
+  --color-bg: #f4f6f8;
+  --color-surface: #ffffff;
+  --color-border: #dbe1e8;
+  --color-text: #1c2530;
+  --color-muted: #5b6b7c;
+  --color-primary: #1d4ed8;
+  --color-primary-hover: #1a3fb0;
+  --color-success: #157347;
+  --color-success-bg: #e8f6ee;
+  --color-error: #b3261e;
+  --color-error-bg: #fdecea;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-nav {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 60px;
+}
+
+.app-nav .brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.app-nav .nav-links {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.app-nav a.nav-link {
+  color: var(--color-muted);
+  text-decoration: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.app-nav a.nav-link:hover {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.app-nav a.nav-link.active {
+  background: #eaf0fe;
+  color: var(--color-primary);
+}
+
+main {
+  flex: 1;
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 48px 24px 64px;
+}
+
+.page-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin: 0 0 6px;
+}
+
+.page-subtitle {
+  color: var(--color-muted);
+  margin: 0 0 32px;
+  font-size: 0.98rem;
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 28px;
+  margin-bottom: 24px;
+}
+
+.card h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+}
+
+.card .card-hint {
+  color: var(--color-muted);
+  font-size: 0.88rem;
+  margin: 0 0 20px;
+}
+
+.field-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--color-text);
+}
+
+.combobox {
+  position: relative;
+}
+
+.combobox input[type="text"] {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  text-transform: uppercase;
+}
+
+.combobox input[type="text"]:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+
+.combobox input[type="text"]::placeholder {
+  text-transform: none;
+}
+
+.combobox-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 6px;
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  max-height: 260px;
+  overflow-y: auto;
+  display: none;
+}
+
+.combobox-list.open {
+  display: block;
+}
+
+.combobox-list li {
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+}
+
+.combobox-list li:hover,
+.combobox-list li.active {
+  background: #eaf0fe;
+  color: var(--color-primary);
+}
+
+.combobox-list li.empty-state {
+  color: var(--color-muted);
+  cursor: default;
+  text-transform: none;
+}
+
+.combobox-list li.empty-state:hover {
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.selected-advisor {
+  margin-top: 14px;
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  min-height: 20px;
+}
+
+.selected-advisor strong {
+  color: var(--color-text);
+}
+
+button.primary-btn {
+  margin-top: 20px;
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+  padding: 12px 22px;
+  border-radius: 8px;
+  font-size: 0.98rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+button.primary-btn:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+button.primary-btn:disabled {
+  background: #a9b8d8;
+  cursor: not-allowed;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+  display: none;
+}
+
+.spinner.visible {
+  display: inline-block;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status-banner {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  display: none;
+}
+
+.status-banner.visible {
+  display: block;
+}
+
+.status-banner.success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.status-banner.error {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.upload-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 620px) {
+  .upload-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.file-drop {
+  border: 1.5px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 22px 14px;
+  text-align: center;
+  color: var(--color-muted);
+  font-size: 0.88rem;
+  cursor: pointer;
+  background: var(--color-bg);
+}
+
+.file-drop.has-file {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+  background: #eaf0fe;
+}
+
+.file-drop input[type="file"] {
+  display: none;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 14px;
+  font-size: 0.86rem;
+}
+
+.results-table td {
+  padding: 4px 0;
+  color: var(--color-muted);
+}
+
+.results-table td:last-child {
+  text-align: right;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.audit-note {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+  margin-top: 32px;
+  text-align: center;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

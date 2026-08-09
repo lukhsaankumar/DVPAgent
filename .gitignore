@@ -97,6 +97,7 @@ venv.bak/
 # dotenv
 .env
 .env.*
+!.env.example
 
 # VS Code
 .vscode/

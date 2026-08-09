@@ -1,0 +1,6 @@
+# Dev/test extras on top of requirements.txt -- needed only for
+# tests/e2e_smoke_test.py, not for running the app itself.
+-r requirements.txt
+
+pytest>=8.0.0
+playwright>=1.45.0

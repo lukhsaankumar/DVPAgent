@@ -11,25 +11,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from dvp_meeting_prep.db import get_supabase_client
-from dvp_meeting_prep.files import pretty_json
+from dvp_meeting_prep.files import pretty_json, slugify_filename
 from dvp_meeting_prep.query import fetch_all_sources_for_advisor
 from dvp_meeting_prep.prompting import build_meeting_prep_prompt
 from dvp_meeting_prep.llm import generate_meeting_prep
-from dvp_meeting_prep.config import get_settings
-
-
-def _slugify_filename(value: str) -> str:
-    slug = []
-    previous_was_separator = False
-    for char in value.lower():
-        if char.isalnum():
-            slug.append(char)
-            previous_was_separator = False
-        elif not previous_was_separator:
-            slug.append("_")
-            previous_was_separator = True
-    text = "".join(slug).strip("_")
-    return text or "advisor"
 
 
 def sample_advisors(client, limit: int = 5) -> List[str]:
@@ -123,7 +108,7 @@ def main() -> None:
         print("Prompt was:\n", prompt)
         return
 
-    default_output_path = Path("output") / f"{_slugify_filename(advisor_name)}_meeting_prep.md"
+    default_output_path = Path("output") / f"{slugify_filename(advisor_name)}_meeting_prep.md"
     default_output_path.parent.mkdir(parents=True, exist_ok=True)
     default_output_path.write_text(content, encoding="utf-8")
 

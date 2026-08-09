@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DVP Meeting Prep</title>
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <nav class="app-nav">
+        <a class="brand" href="/">DVP Meeting Prep</a>
+        <div class="nav-links">
+          <a class="nav-link active" href="/">Home</a>
+          <a class="nav-link" href="/upload">Upload</a>
+        </div>
+      </nav>
+
+      <main>
+        <h1 class="page-title">Advisor meeting prep</h1>
+        <p class="page-subtitle">Search for an advisor, then generate a ready-to-edit Word document from Salesforce, Tableau, and consultant scorecard data.</p>
+
+        <div class="card">
+          <h2>Find an advisor</h2>
+          <p class="card-hint">Start typing a name to search advisors already ingested from Salesforce and Tableau.</p>
+
+          <label class="field-label" for="advisor-input">Advisor name</label>
+          <div class="combobox">
+            <input
+              type="text"
+              id="advisor-input"
+              role="combobox"
+              aria-expanded="false"
+              aria-autocomplete="list"
+              aria-controls="advisor-list"
+              autocomplete="off"
+              placeholder="Start typing, e.g. &quot;av&quot;"
+            />
+            <ul class="combobox-list" id="advisor-list" role="listbox"></ul>
+          </div>
+
+          <div class="selected-advisor" id="selected-advisor" aria-live="polite"></div>
+
+          <button class="primary-btn" id="generate-btn" type="button" disabled>
+            <span class="spinner" id="generate-spinner"></span>
+            <span id="generate-btn-label">Get meeting prep document</span>
+          </button>
+
+          <div class="status-banner" id="status-banner" role="status"></div>
+        </div>
+
+        <p class="audit-note">Need to add new data first? Head to the <a href="/upload">Upload</a> page for consultant scorecards and Tableau exports.</p>
+      </main>
+    </div>
+
+    <script src="/assets/js/home.js"></script>
+  </body>
+</html>

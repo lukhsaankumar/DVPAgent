@@ -1,0 +1,31 @@
+.git/
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# secrets -- never bake these into an image
+.env
+.env.*
+!.env.example
+
+# local-only data and scratch output, not needed to run the app
+RelatedMaterials/
+output/
+plan.md
+
+# dev/test tooling not needed in the runtime image
+tests/
+requirements-dev.txt
+.pytest_cache/
+
+# editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+Dockerfile
+.dockerignore
+docker-compose.yml

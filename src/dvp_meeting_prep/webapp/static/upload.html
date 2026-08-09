@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Upload Data - DVP Meeting Prep</title>
+    <link rel="stylesheet" href="/assets/css/style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <nav class="app-nav">
+        <a class="brand" href="/">DVP Meeting Prep</a>
+        <div class="nav-links">
+          <a class="nav-link" href="/">Home</a>
+          <a class="nav-link active" href="/upload">Upload</a>
+        </div>
+      </nav>
+
+      <main>
+        <h1 class="page-title">Upload source data</h1>
+        <p class="page-subtitle">Upload a consultant scorecard workbook or a Tableau export. Files are parsed and matched against existing rows automatically, so re-uploading the same file never creates duplicates.</p>
+
+        <div class="upload-grid">
+          <section class="card" data-uploader data-source-type="consultant_scorecard" data-endpoint="/api/uploads/consultant-scorecard" data-accept=".xlsx,.xlsm">
+            <h2>Consultant scorecard</h2>
+            <p class="card-hint">Excel workbook (.xlsx) with an "Advisor Detail" sheet.</p>
+
+            <label class="file-drop" data-drop-zone>
+              <span data-drop-label>Click to choose a file, or drag one here</span>
+              <input type="file" accept=".xlsx,.xlsm" data-file-input />
+            </label>
+
+            <button class="primary-btn" type="button" data-upload-btn disabled>
+              <span class="spinner" data-spinner></span>
+              <span data-btn-label>Upload consultant scorecard</span>
+            </button>
+
+            <div class="status-banner" role="status" data-status></div>
+          </section>
+
+          <section class="card" data-uploader data-source-type="tableau" data-endpoint="/api/uploads/tableau" data-accept=".csv">
+            <h2>Tableau export</h2>
+            <p class="card-hint">CSV export with an "Advisor" column.</p>
+
+            <label class="file-drop" data-drop-zone>
+              <span data-drop-label>Click to choose a file, or drag one here</span>
+              <input type="file" accept=".csv" data-file-input />
+            </label>
+
+            <button class="primary-btn" type="button" data-upload-btn disabled>
+              <span class="spinner" data-spinner></span>
+              <span data-btn-label>Upload Tableau export</span>
+            </button>
+
+            <div class="status-banner" role="status" data-status></div>
+          </section>
+        </div>
+
+        <p class="audit-note">Salesforce data is not uploaded here &mdash; it will sync directly from the Salesforce sandbox in a future update.</p>
+      </main>
+    </div>
+
+    <script src="/assets/js/upload.js"></script>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -16,7 +17,17 @@ from dvp_meeting_prep.ingest import ingest_all_sources
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ingest Salesforce, Tableau, and consultant scorecard data into Supabase.")
-    parser.add_argument("--salesforce", default=str(repo_path("RelatedMaterials", "Sample", "Salesforce Spreadsheet Input - DummyData.xlsx")))
+    parser.add_argument(
+        "--source",
+        choices=["salesforce", "csv"],
+        default=None,
+        help="Override DATA_SOURCE for the Salesforce/advisor portion of ingestion (default: use the DATA_SOURCE env var, which defaults to 'salesforce').",
+    )
+    parser.add_argument(
+        "--salesforce",
+        default=str(repo_path("RelatedMaterials", "Sample", "Salesforce Spreadsheet Input - DummyData.xlsx")),
+        help="Path to the local .xlsx export. Only used when the Salesforce data source resolves to 'csv' (the local fallback); ignored when pulling live from Salesforce.",
+    )
     parser.add_argument("--tableau", default=str(repo_path("RelatedMaterials", "Sample", "Tableau - DummyData.csv")))
     parser.add_argument("--scorecard", default=str(repo_path("RelatedMaterials", "Sample", "Consultant Scorecard 2026-03 - DummyData.xlsx")))
     parser.add_argument("--append", action="store_true", help="Append rows instead of replacing existing rows in each table.")
@@ -26,6 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.source:
+        os.environ["DATA_SOURCE"] = args.source
 
     client = get_supabase_client()
     counts = ingest_all_sources(
@@ -42,4 +56,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

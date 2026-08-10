@@ -42,10 +42,31 @@ body {
 }
 
 .app-nav .brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   font-weight: 700;
   font-size: 1.05rem;
   color: var(--color-text);
   text-decoration: none;
+}
+
+.app-nav .brand-logo {
+  height: 30px;
+  width: auto;
+  display: block;
+}
+
+.app-nav .brand-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--color-border);
+}
+
+.app-nav .brand-text {
+  color: var(--color-muted);
+  font-weight: 600;
+  font-size: 0.95rem;
 }
 
 .app-nav .nav-links {

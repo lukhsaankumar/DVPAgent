@@ -7,7 +7,8 @@ import json
 import time
 from typing import Any
 
-from .files import parse_consultant_scorecard, read_consultant_scorecard_rows, read_salesforce_rows, read_tableau_rows
+from .data_source import load_salesforce_source_data
+from .files import parse_consultant_scorecard, read_consultant_scorecard_rows, read_tableau_rows
 
 
 def chunked(items: list[dict[str, Any]], size: int = 100) -> Iterable[list[dict[str, Any]]]:
@@ -364,8 +365,19 @@ def ingest_tableau_upload(client: Any, tableau_path: str | Path) -> dict[str, in
     }
 
 
-def ingest_all_sources(client: Any, salesforce_path: str, tableau_path: str, scorecard_path: str, replace_existing: bool = True) -> dict[str, int]:
-    salesforce_rows = read_salesforce_rows(salesforce_path)
+def ingest_all_sources(
+    client: Any,
+    salesforce_path: str | None,
+    tableau_path: str,
+    scorecard_path: str,
+    replace_existing: bool = True,
+) -> dict[str, int]:
+    """`salesforce_path` is only used when DATA_SOURCE=csv (the local .xlsx
+    fallback); when DATA_SOURCE=salesforce (the default) advisor/task data is
+    pulled from the Salesforce API instead and this path is ignored. See
+    data_source.py for the selection logic.
+    """
+    salesforce_rows = load_salesforce_source_data(csv_path=salesforce_path)
     tableau_rows = read_tableau_rows(tableau_path)
     scorecard_rows = read_consultant_scorecard_rows(scorecard_path)
     scorecard_counts = ingest_consultant_scorecard_structured(client, scorecard_path, replace_existing=replace_existing)

@@ -94,10 +94,17 @@ env/
 env.bak/
 venv.bak/
 
-# dotenv
+# dotenv (.env, .env.sandbox, .env.production, .env.local, etc. -- but keep the
+# committed *.example templates, which contain no real credentials)
 .env
 .env.*
 !.env.example
+!.env.sandbox.example
+!.env.production.example
+
+# Salesforce debug extracts (SF_SAVE_DEBUG_EXTRACTS=true) -- may contain
+# sensitive advisor/account data, never commit these
+.salesforce_debug/
 
 # VS Code
 .vscode/

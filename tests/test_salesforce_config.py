@@ -48,9 +48,9 @@ def test_unsupported_auth_mode_raises(base_env):
 
 
 def test_missing_required_env_var_raises(clean_env):
-    clean_env.setenv("SUPABASE_SECRET_KEY", "x")
-    clean_env.setenv("OPENAI_API_KEY", "x")
-    with pytest.raises(RuntimeError, match="SUPABASE_URL"):
+    clean_env.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    clean_env.setenv("GOOGLE_GENAI_MODEL", "gemini-test-model")
+    with pytest.raises(RuntimeError, match="GOOGLE_CLOUD_PROJECT"):
         get_settings()
 
 
@@ -109,33 +109,33 @@ def test_expected_counts_default_to_business_context_values(base_env):
 
 
 def test_env_file_resolution_prefers_explicit_env_file(clean_env, tmp_path):
-    (tmp_path / ".env.custom").write_text("SUPABASE_URL=https://from-custom-file.supabase.co\n", encoding="utf-8")
+    (tmp_path / ".env.custom").write_text("GOOGLE_CLOUD_PROJECT=from-custom-file\n", encoding="utf-8")
     clean_env.setenv("ENV_FILE", ".env.custom")
-    clean_env.setenv("SUPABASE_SECRET_KEY", "x")
-    clean_env.setenv("OPENAI_API_KEY", "x")
+    clean_env.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    clean_env.setenv("GOOGLE_GENAI_MODEL", "gemini-test-model")
     settings = get_settings()
     assert settings.env_file_used == ".env.custom"
-    assert settings.supabase_url == "https://from-custom-file.supabase.co"
+    assert settings.gemini.project == "from-custom-file"
 
 
 def test_env_file_resolution_derives_from_app_env(clean_env, tmp_path):
-    (tmp_path / ".env.sandbox").write_text("SUPABASE_URL=https://from-sandbox-file.supabase.co\n", encoding="utf-8")
+    (tmp_path / ".env.sandbox").write_text("GOOGLE_CLOUD_PROJECT=from-sandbox-file\n", encoding="utf-8")
     clean_env.setenv("APP_ENV", "sandbox")
-    clean_env.setenv("SUPABASE_SECRET_KEY", "x")
-    clean_env.setenv("OPENAI_API_KEY", "x")
+    clean_env.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    clean_env.setenv("GOOGLE_GENAI_MODEL", "gemini-test-model")
     settings = get_settings()
     assert settings.env_file_used == ".env.sandbox"
-    assert settings.supabase_url == "https://from-sandbox-file.supabase.co"
+    assert settings.gemini.project == "from-sandbox-file"
 
 
 def test_os_environment_variable_wins_over_dotenv_file(clean_env, tmp_path):
-    (tmp_path / ".env.sandbox").write_text("SUPABASE_URL=https://from-file.supabase.co\n", encoding="utf-8")
+    (tmp_path / ".env.sandbox").write_text("GOOGLE_CLOUD_PROJECT=from-file\n", encoding="utf-8")
     clean_env.setenv("APP_ENV", "sandbox")
-    clean_env.setenv("SUPABASE_URL", "https://from-os-env.supabase.co")
-    clean_env.setenv("SUPABASE_SECRET_KEY", "x")
-    clean_env.setenv("OPENAI_API_KEY", "x")
+    clean_env.setenv("GOOGLE_CLOUD_PROJECT", "from-os-env")
+    clean_env.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    clean_env.setenv("GOOGLE_GENAI_MODEL", "gemini-test-model")
     settings = get_settings()
-    assert settings.supabase_url == "https://from-os-env.supabase.co"
+    assert settings.gemini.project == "from-os-env"
 
 
 def test_configure_logging_rejects_unknown_level(monkeypatch):

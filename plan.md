@@ -1,5 +1,12 @@
 # DVP Meeting Prep Agent Plan
 
+> **Historical document.** This was the original MVP plan and describes the
+> initial Supabase + OpenAI architecture. The app has since migrated to
+> local SQLite (see `sql/schema.sql`, `src/dvp_meeting_prep/db.py`) and
+> Gemini Enterprise via Google ADC (see `src/dvp_meeting_prep/llm.py`). Kept
+> for historical context only -- see `README.md` for the current
+> architecture.
+
 ## Goal
 Build an internal agent that prepares advisors for DVP meetings by pulling data from Salesforce, Tableau, and the consultant scorecard, loading each source into its own Supabase table, and generating a meeting prep document with an LLM.
 

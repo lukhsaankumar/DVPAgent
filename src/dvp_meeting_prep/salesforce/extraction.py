@@ -35,8 +35,8 @@ class SalesforceExtractionResult:
 def run_extraction(settings: Settings | None = None, *, dry_run: bool = False) -> SalesforceExtractionResult:
     """Run the full Salesforce extraction pipeline (connect -> resolve
     advisors -> tasks -> opportunities -> normalize -> validate) and return
-    the result. Never writes to Supabase itself -- the caller decides what to
-    do with `.legacy_rows` (e.g. scripts/ingest_all.py inserts them into
+    the result. Never writes to the database itself -- the caller decides what
+    to do with `.legacy_rows` (e.g. scripts/ingest_all.py inserts them into
     salesforce_data), which is what makes `dry_run` safe: it only changes the
     final message printed, not what this function does.
     """

@@ -1,65 +1,71 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
 import hashlib
 import json
-import time
 from typing import Any
 
 from .data_source import load_salesforce_source_data
+from .db import (
+    Database,
+    UpsertResult,
+    bool_to_int,
+    json_dumps,
+    replace_table_rows,
+    upsert_rows_dedup_by_conflict_column,
+)
 from .files import parse_consultant_scorecard, read_consultant_scorecard_rows, read_tableau_rows
 
+# Columns present on every row that carries a nested/JSON raw_payload -- see
+# _prepare_row_for_insert(). SQLite has no native JSON type (sql/schema.sql),
+# so this is the one place that conversion happens for every table.
+_JSON_COLUMN = "raw_payload"
 
-def chunked(items: list[dict[str, Any]], size: int = 100) -> Iterable[list[dict[str, Any]]]:
-    for start in range(0, len(items), size):
-        yield items[start : start + size]
+
+def _prepare_row_for_insert(row: dict[str, Any]) -> dict[str, Any]:
+    prepared = dict(row)
+    if _JSON_COLUMN in prepared:
+        prepared[_JSON_COLUMN] = json_dumps(prepared[_JSON_COLUMN])
+    return prepared
 
 
-def ingest_rows(
-    client: Any,
-    table_name: str,
-    rows: list[dict[str, Any]],
-    replace_existing: bool = True,
-    *,
-    batch_size: int = 100,
-    max_retries: int = 3,
-) -> int:
+def _insert_rows(database: Database, table_name: str, rows: list[dict[str, Any]]) -> None:
     if not rows:
-        return 0
+        return
+    columns = list(rows[0].keys())
+    column_list = ", ".join(columns)
+    placeholders = ", ".join(["?"] * len(columns))
+    with database.write() as conn:
+        conn.executemany(
+            f"INSERT INTO {table_name} ({column_list}) VALUES ({placeholders})",
+            [[row.get(col) for col in columns] for row in rows],
+        )
+
+
+def ingest_rows(database: Database, table_name: str, rows: list[dict[str, Any]], replace_existing: bool = True) -> int:
+    """Insert `rows` into `table_name`.
+
+    When replace_existing (the default, matching pre-migration behavior),
+    the whole table is atomically replaced -- see db.py:replace_table_rows --
+    so a failed insert never leaves the table partially or fully empty.
+    """
+    prepared = [_prepare_row_for_insert(row) for row in rows]
 
     if replace_existing:
-        client.table(table_name).delete().gte("id", 0).execute()
+        return replace_table_rows(database, table_name, prepared)
 
-    inserted = 0
-    for batch in chunked(rows, size=batch_size):
-        attempt = 0
-        while True:
-            try:
-                client.table(table_name).insert(batch).execute()
-                break
-            except Exception:
-                attempt += 1
-                if attempt >= max_retries:
-                    raise
-                time.sleep(0.5 * attempt)
-        inserted += len(batch)
-    return inserted
-
-
-def _chunk_values(values: list[Any], size: int = 100) -> Iterable[list[Any]]:
-    for start in range(0, len(values), size):
-        yield values[start : start + size]
+    _insert_rows(database, table_name, prepared)
+    return len(prepared)
 
 
 def _normalize_for_hash(value: Any) -> Any:
-    """Make a value stable for hashing across a Postgres JSONB round-trip.
-
-    A whole-number Python float (e.g. 4.0) serializes as "4.0", but the same
-    value read back from a jsonb column can come back as the int 4. Without
-    normalizing, the same logical row would hash differently before and
-    after being stored, breaking dedup. Recurses into dicts/lists since
-    hashed values often include a nested raw_payload blob.
+    """Make a value stable for hashing regardless of round-tripping through
+    the database. A whole-number Python float (e.g. 4.0) serializes as
+    "4.0", but the same value read back after a JSON/SQLite round-trip can
+    come back as the int 4. Without normalizing, the same logical row would
+    hash differently before and after being stored, breaking dedup.
+    Recurses into dicts/lists since hashed values often include a nested
+    raw_payload blob.
     """
     if isinstance(value, float) and value.is_integer():
         return int(value)
@@ -94,49 +100,6 @@ def _dedupe_rows_by_hash(rows: list[dict[str, Any]], hash_key: str = "content_ha
     return deduped, duplicates
 
 
-def _existing_hashes(client: Any, table_name: str, hashes: list[str], hash_key: str = "content_hash") -> set[str]:
-    found: set[str] = set()
-    for batch in _chunk_values(hashes, size=200):
-        if not batch:
-            continue
-        response = client.table(table_name).select(hash_key).in_(hash_key, batch).execute()
-        for row in response.data or []:
-            value = row.get(hash_key)
-            if value:
-                found.add(value)
-    return found
-
-
-def _is_missing_table_error(exc: Exception) -> bool:
-    message = str(exc)
-    return "PGRST205" in message or "Could not find the table 'public." in message
-
-
-def _table_exists(client: Any, table_name: str) -> bool:
-    try:
-        client.table(table_name).select("id").limit(1).execute()
-        return True
-    except Exception as exc:
-        if _is_missing_table_error(exc):
-            return False
-        raise
-
-
-def _ensure_structured_scorecard_tables(client: Any) -> None:
-    required_tables = [
-        "consultant_scorecard_raw",
-        "consultant_scorecard_monthly",
-        "consultant_scorecard_metric",
-    ]
-    missing = [table for table in required_tables if not _table_exists(client, table)]
-    if missing:
-        missing_text = ", ".join(missing)
-        raise RuntimeError(
-            "Missing required structured consultant scorecard tables: "
-            f"{missing_text}. Run the latest SQL migration from sql/schema.sql in Supabase SQL Editor, then rerun ingestion."
-        )
-
-
 TABLEAU_HASH_FIELDS = [
     "advisor_name",
     "advisor_name_number",
@@ -168,8 +131,30 @@ CONSULTANT_SCORECARD_RAW_HASH_FIELDS = [
     "raw_payload",
 ]
 
+MONTHLY_COLUMNS = [
+    "source_file",
+    "report_date",
+    "advisor_number",
+    "advisor_name",
+    "area",
+    "ro_number",
+    "region",
+    "division",
+    "base_achievement_level",
+    "etf_completed_approved",
+    "designation",
+    "sales_start_date",
+    "termination_date",
+    "tenure_category",
+    "pwm_indicator",
+    "dealer_code",
+    "insurance_expiry_date",
+    "key_driver_score",
+    "raw_payload",
+]
 
-def _ingest_scorecard_monthly_and_metrics(client: Any, parsed: dict[str, Any], *, replace_existing: bool) -> dict[str, int]:
+
+def _ingest_scorecard_monthly_and_metrics(database: Database, parsed: dict[str, Any], *, replace_existing: bool) -> dict[str, int]:
     monthly_rows_all = parsed["monthly_rows"]
     metric_rows_all = parsed["metric_rows"]
 
@@ -205,60 +190,73 @@ def _ingest_scorecard_monthly_and_metrics(client: Any, parsed: dict[str, Any], *
             continue
         metric_rows.append(metric)
 
-    if replace_existing:
-        client.table("consultant_scorecard_metric").delete().gte("id", 0).execute()
-        client.table("consultant_scorecard_monthly").delete().gte("id", 0).execute()
-
-    monthly_count = 0
-    if monthly_rows:
-        monthly_insert_rows: list[dict[str, Any]] = []
-        for row in monthly_rows:
-            item = dict(row)
-            item.pop("source_row_number", None)
-            monthly_insert_rows.append(item)
-        for batch in chunked(monthly_insert_rows, size=100):
-            client.table("consultant_scorecard_monthly").upsert(batch, on_conflict="report_date,advisor_number").execute()
-            monthly_count += len(batch)
-
     monthly_id_map: dict[tuple[str, str], int] = {}
-    report_date = parsed.get("report_date")
-    advisor_numbers = [row["advisor_number"] for row in monthly_rows if row.get("advisor_number")]
-    if report_date and advisor_numbers:
-        for number_batch in _chunk_values(advisor_numbers, size=100):
-            resp = (
-                client.table("consultant_scorecard_monthly")
-                .select("id,report_date,advisor_number")
-                .eq("report_date", report_date)
-                .in_("advisor_number", number_batch)
-                .execute()
-            )
-            for row in resp.data or []:
-                key = (str(row.get("report_date")), str(row.get("advisor_number")))
-                monthly_id_map[key] = int(row["id"])
-
-    # Metrics are re-derived from the monthly row each ingest, so clear out any
-    # previous metrics for the scorecards touched in this run before re-inserting
-    # (metrics have no natural unique key of their own to upsert against).
-    touched_scorecard_ids = sorted(set(monthly_id_map.values()))
-    for id_batch in _chunk_values(touched_scorecard_ids, size=200):
-        client.table("consultant_scorecard_metric").delete().in_("scorecard_id", id_batch).execute()
-
-    metric_insert_rows: list[dict[str, Any]] = []
-    for metric in metric_rows:
-        key = (str(report_date), str(metric.get("advisor_number")))
-        scorecard_id = monthly_id_map.get(key)
-        if scorecard_id is None:
-            continue
-        item = dict(metric)
-        item.pop("advisor_number", None)
-        item.pop("source_row_number", None)
-        item["scorecard_id"] = scorecard_id
-        metric_insert_rows.append(item)
-
+    monthly_count = 0
     metric_count = 0
-    for batch in chunked(metric_insert_rows, size=200):
-        client.table("consultant_scorecard_metric").insert(batch).execute()
-        metric_count += len(batch)
+
+    # One transaction for the whole monthly+metric operation: if inserting
+    # metrics fails partway through, the monthly upserts in the same run are
+    # rolled back too, instead of leaving monthly rows with no metrics.
+    with database.write() as conn:
+        if replace_existing:
+            conn.execute("DELETE FROM consultant_scorecard_metric")
+            conn.execute("DELETE FROM consultant_scorecard_monthly")
+
+        if monthly_rows:
+            set_clause = ", ".join(f"{col} = excluded.{col}" for col in MONTHLY_COLUMNS if col not in ("report_date", "advisor_number"))
+            column_list = ", ".join(MONTHLY_COLUMNS)
+            placeholders = ", ".join(["?"] * len(MONTHLY_COLUMNS))
+            upsert_sql = (
+                f"INSERT INTO consultant_scorecard_monthly ({column_list}) VALUES ({placeholders}) "
+                f"ON CONFLICT(report_date, advisor_number) DO UPDATE SET {set_clause} "
+                "RETURNING id, report_date, advisor_number"
+            )
+            for row in monthly_rows:
+                item = dict(row)
+                item.pop("source_row_number", None)
+                item["etf_completed_approved"] = bool_to_int(item.get("etf_completed_approved"))
+                item["pwm_indicator"] = bool_to_int(item.get("pwm_indicator"))
+                item["raw_payload"] = json_dumps(item.get("raw_payload"))
+                values = [item.get(col) for col in MONTHLY_COLUMNS]
+                cursor = conn.execute(upsert_sql, values)
+                returned = cursor.fetchone()
+                if returned is not None:
+                    monthly_id_map[(str(returned["report_date"]), str(returned["advisor_number"]))] = int(returned["id"])
+                monthly_count += 1
+
+        # Metrics are re-derived from the monthly row each ingest, so clear out
+        # any previous metrics for the scorecards touched in this run before
+        # re-inserting (metrics have no natural unique key of their own).
+        touched_scorecard_ids = sorted(set(monthly_id_map.values()))
+        if touched_scorecard_ids:
+            placeholders = ", ".join(["?"] * len(touched_scorecard_ids))
+            conn.execute(
+                f"DELETE FROM consultant_scorecard_metric WHERE scorecard_id IN ({placeholders})",
+                touched_scorecard_ids,
+            )
+
+        report_date = parsed.get("report_date")
+        metric_insert_rows: list[dict[str, Any]] = []
+        for metric in metric_rows:
+            key = (str(report_date), str(metric.get("advisor_number")))
+            scorecard_id = monthly_id_map.get(key)
+            if scorecard_id is None:
+                continue
+            item = dict(metric)
+            item.pop("advisor_number", None)
+            item.pop("source_row_number", None)
+            item["scorecard_id"] = scorecard_id
+            metric_insert_rows.append(item)
+
+        if metric_insert_rows:
+            columns = list(metric_insert_rows[0].keys())
+            column_list = ", ".join(columns)
+            placeholders = ", ".join(["?"] * len(columns))
+            conn.executemany(
+                f"INSERT INTO consultant_scorecard_metric ({column_list}) VALUES ({placeholders})",
+                [[row.get(col) for col in columns] for row in metric_insert_rows],
+            )
+        metric_count = len(metric_insert_rows)
 
     return {
         "consultant_scorecard_monthly": monthly_count,
@@ -266,33 +264,31 @@ def _ingest_scorecard_monthly_and_metrics(client: Any, parsed: dict[str, Any], *
     }
 
 
-def _ingest_scorecard_raw(client: Any, raw_rows_all: list[dict[str, Any]], *, replace_existing: bool) -> dict[str, int]:
+def _ingest_scorecard_raw(database: Database, raw_rows_all: list[dict[str, Any]], *, replace_existing: bool) -> dict[str, int]:
     for row in raw_rows_all:
         row["content_hash"] = _row_content_hash(row, CONSULTANT_SCORECARD_RAW_HASH_FIELDS)
 
     deduped_rows, intra_batch_duplicates = _dedupe_rows_by_hash(raw_rows_all)
+    prepared_rows = [_prepare_row_for_insert(row) for row in deduped_rows]
 
     if replace_existing:
-        client.table("consultant_scorecard_raw").delete().gte("id", 0).execute()
-        existing_hashes: set[str] = set()
-    else:
-        existing_hashes = _existing_hashes(client, "consultant_scorecard_raw", [row["content_hash"] for row in deduped_rows])
+        inserted = replace_table_rows(database, "consultant_scorecard_raw", prepared_rows)
+        return {
+            "rows_parsed": len(raw_rows_all),
+            "rows_inserted": inserted,
+            "rows_skipped_duplicate": intra_batch_duplicates,
+        }
 
-    duplicate_count = intra_batch_duplicates + sum(1 for row in deduped_rows if row["content_hash"] in existing_hashes)
-    new_count = len(deduped_rows) - sum(1 for row in deduped_rows if row["content_hash"] in existing_hashes)
-
-    for batch in chunked(deduped_rows, size=100):
-        client.table("consultant_scorecard_raw").upsert(batch, on_conflict="content_hash").execute()
-
+    result = upsert_rows_dedup_by_conflict_column(database, "consultant_scorecard_raw", prepared_rows, "content_hash")
     return {
         "rows_parsed": len(raw_rows_all),
-        "rows_inserted": new_count,
-        "rows_skipped_duplicate": duplicate_count,
+        "rows_inserted": result.rows_inserted,
+        "rows_skipped_duplicate": intra_batch_duplicates + result.rows_skipped_duplicate,
     }
 
 
 def ingest_consultant_scorecard_structured(
-    client: Any, scorecard_path: str | Path, replace_existing: bool = True, *, source_file_name: str | None = None
+    database: Database, scorecard_path: str | Path, replace_existing: bool = True, *, source_file_name: str | None = None
 ) -> dict[str, int]:
     """Full ingest of a consultant scorecard workbook (raw + monthly + metric tables).
 
@@ -300,11 +296,10 @@ def ingest_consultant_scorecard_structured(
     rows upsert on (report_date, advisor_number), so re-running with the same
     file never creates duplicate rows.
     """
-    _ensure_structured_scorecard_tables(client)
     parsed = parse_consultant_scorecard(scorecard_path, source_file_name=source_file_name)
 
-    raw_counts = _ingest_scorecard_raw(client, parsed["raw_rows"], replace_existing=replace_existing)
-    monthly_metric_counts = _ingest_scorecard_monthly_and_metrics(client, parsed, replace_existing=replace_existing)
+    raw_counts = _ingest_scorecard_raw(database, parsed["raw_rows"], replace_existing=replace_existing)
+    monthly_metric_counts = _ingest_scorecard_monthly_and_metrics(database, parsed, replace_existing=replace_existing)
 
     return {
         "consultant_scorecard_raw": raw_counts["rows_inserted"],
@@ -313,7 +308,7 @@ def ingest_consultant_scorecard_structured(
     }
 
 
-def ingest_consultant_scorecard_upload(client: Any, scorecard_path: str | Path, *, source_file_name: str | None = None) -> dict[str, int]:
+def ingest_consultant_scorecard_upload(database: Database, scorecard_path: str | Path, *, source_file_name: str | None = None) -> dict[str, int]:
     """Ingest a consultant scorecard workbook uploaded through the /upload UI.
 
     `source_file_name` should be the original uploaded file name, not the
@@ -324,11 +319,10 @@ def ingest_consultant_scorecard_upload(client: Any, scorecard_path: str | Path, 
     upsert per advisor/report-date, so uploading the same file twice (or an
     overlapping export) is a no-op for rows that already exist.
     """
-    _ensure_structured_scorecard_tables(client)
     parsed = parse_consultant_scorecard(scorecard_path, source_file_name=source_file_name)
 
-    raw_counts = _ingest_scorecard_raw(client, parsed["raw_rows"], replace_existing=False)
-    monthly_metric_counts = _ingest_scorecard_monthly_and_metrics(client, parsed, replace_existing=False)
+    raw_counts = _ingest_scorecard_raw(database, parsed["raw_rows"], replace_existing=False)
+    monthly_metric_counts = _ingest_scorecard_monthly_and_metrics(database, parsed, replace_existing=False)
 
     return {
         "rows_parsed": raw_counts["rows_parsed"],
@@ -339,7 +333,7 @@ def ingest_consultant_scorecard_upload(client: Any, scorecard_path: str | Path, 
     }
 
 
-def ingest_tableau_upload(client: Any, tableau_path: str | Path) -> dict[str, int]:
+def ingest_tableau_upload(database: Database, tableau_path: str | Path) -> dict[str, int]:
     """Ingest a Tableau export CSV uploaded through the /upload UI.
 
     Rows dedupe on a content hash of their data fields, so re-uploading the
@@ -350,23 +344,19 @@ def ingest_tableau_upload(client: Any, tableau_path: str | Path) -> dict[str, in
         row["content_hash"] = _row_content_hash(row, TABLEAU_HASH_FIELDS)
 
     deduped_rows, intra_batch_duplicates = _dedupe_rows_by_hash(rows)
-    existing_hashes = _existing_hashes(client, "tableau_data", [row["content_hash"] for row in deduped_rows])
+    prepared_rows = [_prepare_row_for_insert(row) for row in deduped_rows]
 
-    duplicate_count = intra_batch_duplicates + sum(1 for row in deduped_rows if row["content_hash"] in existing_hashes)
-    new_count = len(deduped_rows) - sum(1 for row in deduped_rows if row["content_hash"] in existing_hashes)
-
-    for batch in chunked(deduped_rows, size=200):
-        client.table("tableau_data").upsert(batch, on_conflict="content_hash").execute()
+    result: UpsertResult = upsert_rows_dedup_by_conflict_column(database, "tableau_data", prepared_rows, "content_hash")
 
     return {
         "rows_parsed": len(rows),
-        "rows_inserted": new_count,
-        "rows_skipped_duplicate": duplicate_count,
+        "rows_inserted": result.rows_inserted,
+        "rows_skipped_duplicate": intra_batch_duplicates + result.rows_skipped_duplicate,
     }
 
 
 def ingest_all_sources(
-    client: Any,
+    database: Database,
     salesforce_path: str | None,
     tableau_path: str,
     scorecard_path: str,
@@ -380,17 +370,16 @@ def ingest_all_sources(
     salesforce_rows = load_salesforce_source_data(csv_path=salesforce_path)
     tableau_rows = read_tableau_rows(tableau_path)
     scorecard_rows = read_consultant_scorecard_rows(scorecard_path)
-    scorecard_counts = ingest_consultant_scorecard_structured(client, scorecard_path, replace_existing=replace_existing)
+    scorecard_counts = ingest_consultant_scorecard_structured(database, scorecard_path, replace_existing=replace_existing)
 
     counts = {
-        "salesforce_data": ingest_rows(client, "salesforce_data", salesforce_rows, replace_existing=replace_existing),
-        "tableau_data": ingest_rows(client, "tableau_data", tableau_rows, replace_existing=replace_existing),
+        "salesforce_data": ingest_rows(database, "salesforce_data", salesforce_rows, replace_existing=replace_existing),
+        "tableau_data": ingest_rows(database, "tableau_data", tableau_rows, replace_existing=replace_existing),
         "consultant_scorecard_data": ingest_rows(
-            client,
+            database,
             "consultant_scorecard_data",
             scorecard_rows,
             replace_existing=replace_existing,
-            batch_size=20,
         ),
     }
     counts.update(scorecard_counts)

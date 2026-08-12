@@ -2,7 +2,7 @@
 
 This app can pull advisor/task data directly from Salesforce instead of the
 local `.xlsx` export. This doc covers setup, discovery, and troubleshooting.
-For everything else (Supabase, the web app, Docker), see the main
+For everything else (SQLite, Gemini, the web app, Docker), see the main
 [README](../README.md).
 
 ## How it fits together
@@ -23,7 +23,7 @@ salesforce/extraction.py    files.py: read_salesforce_rows()  (DATA_SOURCE=csv)
    same row shape either way (see salesforce/normalize.py:LEGACY_ROW_COLUMNS)
         |
         v
-ingest.py: ingest_rows(..., "salesforce_data", ...) -> Supabase
+ingest.py: ingest_rows(..., "salesforce_data", ...) -> SQLite
 ```
 
 Downstream code (ingestion, prompting, the web app) never branches on which
@@ -127,7 +127,7 @@ python scripts/salesforce_extract.py --dry-run
 
 Connects, validates metadata, runs all three queries (advisors, tasks,
 opportunities), normalizes, and prints `[VALIDATION]` results -- without
-writing to Supabase or generating any meeting prep document. Use this to
+writing to the database or generating any meeting prep document. Use this to
 confirm the expected counts before doing a real ingest:
 
 ```
@@ -143,7 +143,7 @@ python scripts/salesforce_extract.py
 ```
 
 Same as the dry run, but also writes the resulting rows into the
-`salesforce_data` Supabase table (replacing existing rows, same as the
+`salesforce_data` SQLite table (replacing existing rows, same as the
 CSV-based `scripts/ingest_all.py` always did). This is what "Salesforce is
 the default data source" means in practice -- `scripts/ingest_all.py` calls
 the same underlying pipeline for its Salesforce portion whenever

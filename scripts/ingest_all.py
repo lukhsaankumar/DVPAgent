@@ -11,12 +11,12 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from dvp_meeting_prep.config import repo_path
-from dvp_meeting_prep.db import get_supabase_client
+from dvp_meeting_prep.db import get_database
 from dvp_meeting_prep.ingest import ingest_all_sources
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Ingest Salesforce, Tableau, and consultant scorecard data into Supabase.")
+    parser = argparse.ArgumentParser(description="Ingest Salesforce, Tableau, and consultant scorecard data into SQLite.")
     parser.add_argument(
         "--source",
         choices=["salesforce", "csv"],
@@ -41,9 +41,10 @@ def main() -> None:
     if args.source:
         os.environ["DATA_SOURCE"] = args.source
 
-    client = get_supabase_client()
+    database = get_database()
+    database.ensure_schema_ready()
     counts = ingest_all_sources(
-        client=client,
+        database=database,
         salesforce_path=args.salesforce,
         tableau_path=args.tableau,
         scorecard_path=args.scorecard,

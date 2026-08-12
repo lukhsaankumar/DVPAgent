@@ -10,19 +10,19 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from dvp_meeting_prep.db import get_supabase_client
+from dvp_meeting_prep.db import Database, fetch_all, get_database
 from dvp_meeting_prep.files import pretty_json, slugify_filename
 from dvp_meeting_prep.query import fetch_all_sources_for_advisor
 from dvp_meeting_prep.prompting import build_meeting_prep_prompt
-from dvp_meeting_prep.llm import generate_meeting_prep
+from dvp_meeting_prep.llm import close_gemini_client, generate_meeting_prep
 
 
-def sample_advisors(client, limit: int = 5) -> List[str]:
-    # try salesforce first, then tableau
+def sample_advisors(database: Database, limit: int = 5) -> List[str]:
+    # try salesforce first, then tableau, then the scorecard mirror
     for table in ("salesforce_data", "tableau_data", "consultant_scorecard_data"):
         try:
-            resp = client.table(table).select("advisor_name").limit(limit).execute()
-            rows = resp.data or []
+            with database.read() as conn:
+                rows = fetch_all(conn, f"SELECT DISTINCT advisor_name FROM {table} LIMIT ?", (limit,))
             names = []
             for r in rows:
                 name = r.get("advisor_name")
@@ -67,12 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    client = get_supabase_client()
-    examples = sample_advisors(client, limit=5)
+    database = get_database()
+    examples = sample_advisors(database, limit=5)
     advisor_name = choose_name(examples)
 
     print(f"\nFetching rows for advisor: {advisor_name}\n")
-    source_results = fetch_all_sources_for_advisor(client, advisor_name)
+    source_results = fetch_all_sources_for_advisor(database, advisor_name)
 
     for table_name, rows in source_results.items():
         print(f"\n== {table_name} ({len(rows)} rows) ==")
@@ -96,7 +96,7 @@ def main() -> None:
     print(prompt[:2000])
     print(f"\nSaved full prompt to: {prompt_output_path}")
 
-    do_generate = input("Call OpenAI to generate meeting prep now? [y/N]: ").strip().lower() == "y"
+    do_generate = input("Call Gemini to generate meeting prep now? [y/N]: ").strip().lower() == "y"
     if not do_generate:
         print("Skipping LLM call. You can run scripts/run_meeting_prep.py later.")
         return
@@ -104,9 +104,12 @@ def main() -> None:
     try:
         content = generate_meeting_prep(prompt)
     except Exception as e:
+        # Never print the prompt on failure -- it contains Salesforce
+        # comments/notes and other advisor-sensitive source data.
         print("LLM call failed:", e)
-        print("Prompt was:\n", prompt)
         return
+    finally:
+        close_gemini_client()
 
     default_output_path = Path("output") / f"{slugify_filename(advisor_name)}_meeting_prep.md"
     default_output_path.parent.mkdir(parents=True, exist_ok=True)

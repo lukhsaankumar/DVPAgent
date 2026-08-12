@@ -5,4 +5,21 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    volumes:
+      # Persists the SQLite database (data/dvp_meeting_prep.sqlite3 and its
+      # WAL/SHM files) across container restarts and rebuilds. This is a
+      # named volume, not a host bind-mount, so it inherits the /app/data
+      # ownership baked into the image (see Dockerfile) instead of fighting
+      # host-side file permissions.
+      - sqlite_data:/app/data
+      # DEV ONLY: uncomment to let the container use your host's Google
+      # Application Default Credentials (from `gcloud auth application-default
+      # login`) so it can call Gemini Enterprise without a service-account
+      # key file. Never do this in production -- production must run under a
+      # Google Cloud runtime identity (e.g. a GKE/Cloud Run service account)
+      # so no credential file needs to exist on disk at all.
+      # - ${HOME}/.config/gcloud:/home/appuser/.config/gcloud:ro
     restart: unless-stopped
+
+volumes:
+  sqlite_data:

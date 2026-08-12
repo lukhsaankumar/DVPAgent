@@ -137,15 +137,24 @@ node_modules/
 # logs
 *.log
 
-# local sqlite DBs
+# local sqlite DBs -- data/dvp_meeting_prep.sqlite3 (and its WAL/SHM sidecar
+# files) is created at runtime by scripts/init_sqlite.py / ensure_schema_ready().
+# Never commit real application data; data/.gitkeep keeps the directory itself
+# tracked so a fresh checkout has somewhere for SQLITE_DB_PATH to resolve to.
 *.db
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-wal
+data/*.db-shm
+data/*.sqlite-wal
+data/*.sqlite-shm
+data/*.sqlite3-wal
+data/*.sqlite3-shm
+!data/.gitkeep
 
 # compiled c extensions
 *.pyd
-
-# local supabase caches
-supabase/.temp
-supabase/.cache
 
 
 RelatedMaterials/

@@ -1,14 +1,35 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from dvp_meeting_prep import data_source
-from dvp_meeting_prep.config import SalesforceConfig, Settings
+from dvp_meeting_prep.config import GeminiConfig, SalesforceConfig, Settings, SQLiteConfig
 
 
 def _settings(data_source_value: str, csv_input_path: str | None = None) -> Settings:
+    sqlite_config = SQLiteConfig(
+        db_path=Path("data/dvp_meeting_prep.sqlite3"),
+        busy_timeout_ms=10000,
+        journal_mode="WAL",
+        foreign_keys=True,
+        synchronous="NORMAL",
+        debug=False,
+    )
+    gemini_config = GeminiConfig(
+        provider="gemini_enterprise",
+        project="test-project",
+        location="us-central1",
+        model="gemini-test-model",
+        api_version="v1",
+        temperature=0.2,
+        max_output_tokens=8192,
+        request_timeout_seconds=120,
+        max_retries=3,
+        store_audit_content=True,
+    )
     sf_config = SalesforceConfig(
         auth_mode="password",
         username=None,
@@ -32,16 +53,14 @@ def _settings(data_source_value: str, csv_input_path: str | None = None) -> Sett
         opportunity_extra_fields=(),
     )
     return Settings(
-        supabase_url="https://x.supabase.co",
-        supabase_secret_key="x",
-        supabase_publishable_key=None,
-        openai_api_key="x",
-        openai_model="gpt-4.1-mini",
+        database_backend="sqlite",
+        sqlite=sqlite_config,
         data_source=data_source_value,
         app_env="sandbox",
         env_file_used=".env",
         csv_input_path=csv_input_path,
         salesforce=sf_config,
+        gemini=gemini_config,
     )
 
 

@@ -1,9 +1,10 @@
 """End-to-end browser smoke test for the DVP Meeting Prep web app.
 
 Not part of the automated pytest suite: it drives a real browser against a
-running server and hits the real Supabase project and OpenAI API configured
-in .env, so it costs money and mutates data (uploads sample files). Run it
-manually after standing up the server:
+running server, writes to the real local SQLite database configured in .env,
+and hits the real Gemini Enterprise API (via Google Application Default
+Credentials), so it costs money/quota and mutates data (uploads sample
+files). Run it manually after standing up the server:
 
     python scripts/run_server.py
     python -m pip install -e ".[dev]"

@@ -4,14 +4,14 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..advisors import search_advisor_names
-from ..db import get_supabase_client
+from ..config import get_settings
+from ..db import Database, get_database
 from ..docx_export import markdown_to_docx_bytes
 from ..files import slugify_filename
 from ..ingest import ingest_consultant_scorecard_upload, ingest_tableau_upload
@@ -42,19 +42,27 @@ class UploadResult(BaseModel):
     rows_skipped_duplicate: int
 
 
-def _record_upload_batch(client: Any, *, source_type: str, file_name: str, counts: dict[str, int] | None, status: str, error_message: str | None) -> None:
+def _record_upload_batch(
+    database: Database, *, source_type: str, file_name: str, counts: dict[str, int] | None, status: str, error_message: str | None
+) -> None:
     try:
-        client.table("upload_batches").insert(
-            {
-                "source_type": source_type,
-                "file_name": file_name,
-                "rows_parsed": (counts or {}).get("rows_parsed", 0),
-                "rows_inserted": (counts or {}).get("rows_inserted", 0),
-                "rows_skipped_duplicate": (counts or {}).get("rows_skipped_duplicate", 0),
-                "status": status,
-                "error_message": error_message,
-            }
-        ).execute()
+        with database.write() as conn:
+            conn.execute(
+                """
+                INSERT INTO upload_batches
+                    (source_type, file_name, rows_parsed, rows_inserted, rows_skipped_duplicate, status, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_type,
+                    file_name,
+                    (counts or {}).get("rows_parsed", 0),
+                    (counts or {}).get("rows_inserted", 0),
+                    (counts or {}).get("rows_skipped_duplicate", 0),
+                    status,
+                    error_message,
+                ),
+            )
     except Exception:
         logger.exception("Failed to record upload batch audit row for %s (%s)", file_name, source_type)
 
@@ -83,14 +91,18 @@ def _safe_unlink(path: Path) -> None:
 
 @router.get("/health")
 def health() -> dict[str, str]:
+    database = get_database()
+    result = database.health_check()
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {result.get('error')}")
     return {"status": "ok"}
 
 
 @router.get("/advisors", response_model=AdvisorSearchResponse)
 def get_advisors(q: str = Query(default="", max_length=200), limit: int = Query(default=20, ge=1, le=100)) -> AdvisorSearchResponse:
-    client = get_supabase_client()
+    database = get_database()
     try:
-        matches = search_advisor_names(client, q, limit=limit)
+        matches = search_advisor_names(database, q, limit=limit)
     except Exception as exc:
         logger.exception("Advisor search failed")
         raise HTTPException(status_code=502, detail=f"Could not search advisors: {exc}") from exc
@@ -102,18 +114,18 @@ async def upload_tableau(file: UploadFile) -> UploadResult:
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Tableau uploads must be a .csv file.")
 
-    client = get_supabase_client()
+    database = get_database()
     temp_path = await _write_upload_to_temp_file(file, suffix=".csv")
     try:
-        counts = ingest_tableau_upload(client, temp_path)
+        counts = ingest_tableau_upload(database, temp_path)
     except Exception as exc:
         logger.exception("Tableau upload ingestion failed for %s", file.filename)
-        _record_upload_batch(client, source_type="tableau", file_name=file.filename, counts=None, status="error", error_message=str(exc))
+        _record_upload_batch(database, source_type="tableau", file_name=file.filename, counts=None, status="error", error_message=str(exc))
         raise HTTPException(status_code=422, detail=f"Could not ingest Tableau file: {exc}") from exc
     finally:
         _safe_unlink(temp_path)
 
-    _record_upload_batch(client, source_type="tableau", file_name=file.filename, counts=counts, status="success", error_message=None)
+    _record_upload_batch(database, source_type="tableau", file_name=file.filename, counts=counts, status="success", error_message=None)
     return UploadResult(source_type="tableau", file_name=file.filename, **counts)
 
 
@@ -122,18 +134,18 @@ async def upload_consultant_scorecard(file: UploadFile) -> UploadResult:
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="Consultant scorecard uploads must be an .xlsx file.")
 
-    client = get_supabase_client()
+    database = get_database()
     temp_path = await _write_upload_to_temp_file(file, suffix=".xlsx")
     try:
-        counts = ingest_consultant_scorecard_upload(client, temp_path, source_file_name=file.filename)
+        counts = ingest_consultant_scorecard_upload(database, temp_path, source_file_name=file.filename)
     except Exception as exc:
         logger.exception("Consultant scorecard upload ingestion failed for %s", file.filename)
-        _record_upload_batch(client, source_type="consultant_scorecard", file_name=file.filename, counts=None, status="error", error_message=str(exc))
+        _record_upload_batch(database, source_type="consultant_scorecard", file_name=file.filename, counts=None, status="error", error_message=str(exc))
         raise HTTPException(status_code=422, detail=f"Could not ingest consultant scorecard file: {exc}") from exc
     finally:
         _safe_unlink(temp_path)
 
-    _record_upload_batch(client, source_type="consultant_scorecard", file_name=file.filename, counts=counts, status="success", error_message=None)
+    _record_upload_batch(database, source_type="consultant_scorecard", file_name=file.filename, counts=counts, status="success", error_message=None)
     return UploadResult(
         source_type="consultant_scorecard",
         file_name=file.filename,
@@ -143,16 +155,28 @@ async def upload_consultant_scorecard(file: UploadFile) -> UploadResult:
     )
 
 
+def _record_meeting_prep_document(database: Database, *, advisor_name: str, prompt: str, response: str) -> None:
+    try:
+        with database.write() as conn:
+            conn.execute(
+                "INSERT INTO meeting_prep_documents (advisor_name, prompt, response) VALUES (?, ?, ?)",
+                (advisor_name, prompt, response),
+            )
+    except Exception:
+        logger.exception("Failed to record meeting_prep_documents audit row for %s", advisor_name)
+
+
 @router.post("/meeting-prep")
 def create_meeting_prep(payload: MeetingPrepRequest) -> Response:
     advisor_name = payload.advisor_name.strip()
     if not advisor_name:
         raise HTTPException(status_code=400, detail="advisor_name is required.")
 
-    client = get_supabase_client()
+    settings = get_settings()
+    database = get_database()
 
     try:
-        source_results = fetch_all_sources_for_advisor(client, advisor_name)
+        source_results = fetch_all_sources_for_advisor(database, advisor_name)
     except Exception as exc:
         logger.exception("Failed to fetch source data for advisor %s", advisor_name)
         raise HTTPException(status_code=502, detail=f"Could not fetch advisor data: {exc}") from exc
@@ -168,12 +192,8 @@ def create_meeting_prep(payload: MeetingPrepRequest) -> Response:
         logger.exception("LLM generation failed for advisor %s", advisor_name)
         raise HTTPException(status_code=502, detail=f"Meeting prep generation failed: {exc}") from exc
 
-    try:
-        client.table("meeting_prep_documents").insert(
-            {"advisor_name": advisor_name, "prompt": prompt, "response": markdown_response}
-        ).execute()
-    except Exception:
-        logger.exception("Failed to record meeting_prep_documents audit row for %s", advisor_name)
+    if settings.gemini.store_audit_content:
+        _record_meeting_prep_document(database, advisor_name=advisor_name, prompt=prompt, response=markdown_response)
 
     try:
         docx_bytes = markdown_to_docx_bytes(markdown_response, title=f"DVP Meeting Prep: {advisor_name}")

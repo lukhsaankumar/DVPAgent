@@ -11,7 +11,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from dvp_meeting_prep.config import configure_logging, get_settings
-from dvp_meeting_prep.db import get_supabase_client
+from dvp_meeting_prep.db import get_database
 from dvp_meeting_prep.ingest import ingest_rows
 from dvp_meeting_prep.salesforce import client as sf_client
 from dvp_meeting_prep.salesforce import metadata as sf_metadata
@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Connect, query, normalize, and validate, but do not write anything to Supabase.",
+        help="Connect, query, normalize, and validate, but do not write anything to the database.",
     )
     parser.add_argument(
         "--source",
@@ -68,8 +68,9 @@ def main() -> None:
         print(f"\n[DRY RUN] Would ingest {len(result.legacy_rows)} rows into salesforce_data (nothing was written).")
         return
 
-    client = get_supabase_client()
-    inserted = ingest_rows(client, "salesforce_data", result.legacy_rows, replace_existing=True)
+    database = get_database()
+    database.ensure_schema_ready()
+    inserted = ingest_rows(database, "salesforce_data", result.legacy_rows, replace_existing=True)
     print(f"salesforce_data: {inserted} rows ingested")
 
 

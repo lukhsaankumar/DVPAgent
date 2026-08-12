@@ -15,6 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VALID_DATA_SOURCES = {"salesforce", "csv"}
 VALID_APP_ENVS = {"sandbox", "production", "custom"}
 VALID_SF_AUTH_MODES = {"password", "access_token"}
+VALID_LLM_PROVIDERS = {"gemini_enterprise"}
+VALID_DATABASE_BACKENDS = {"sqlite"}
+VALID_SQLITE_JOURNAL_MODES = {"WAL", "DELETE", "TRUNCATE", "PERSIST", "MEMORY", "OFF"}
+VALID_SQLITE_SYNCHRONOUS_MODES = {"OFF", "NORMAL", "FULL", "EXTRA"}
 
 # Best-guess custom-field API names for the legacy salesforce_data columns that
 # don't have an obvious standard-field equivalent. These are almost certainly
@@ -48,13 +52,6 @@ DEFAULT_TASK_FIELD_MAP: dict[str, str] = {
 }
 
 
-def normalize_supabase_url(url: str) -> str:
-    cleaned = url.strip()
-    cleaned = cleaned.removesuffix("/")
-    cleaned = cleaned.removesuffix("/rest/v1")
-    return cleaned
-
-
 def _parse_bool(value: str | None, default: bool) -> bool:
     text = (value or "").strip().lower()
     if not text:
@@ -74,6 +71,16 @@ def _parse_int(value: str | None, default: int) -> int:
         return int(text)
     except ValueError as exc:
         raise RuntimeError(f"Could not parse integer environment value: {value!r}.") from exc
+
+
+def _parse_float(value: str | None, default: float) -> float:
+    text = (value or "").strip()
+    if not text:
+        return default
+    try:
+        return float(text)
+    except ValueError as exc:
+        raise RuntimeError(f"Could not parse numeric environment value: {value!r}.") from exc
 
 
 def _parse_csv_list(value: str | None) -> tuple[str, ...]:
@@ -154,22 +161,156 @@ class SalesforceConfig:
 
 
 @dataclass(frozen=True)
+class GeminiConfig:
+    """Gemini Enterprise (google-genai) settings. See docs/GEMINI_SQLITE_SETUP.md.
+
+    Authentication uses Google Application Default Credentials -- there is no
+    API key field here by design (see llm.py / docs for the `gcloud auth
+    application-default login` setup flow this expects externally).
+    """
+
+    provider: str
+    project: str
+    location: str
+    model: str
+    api_version: str
+    temperature: float
+    max_output_tokens: int
+    request_timeout_seconds: int
+    max_retries: int
+    store_audit_content: bool
+
+
+def _build_gemini_config() -> GeminiConfig:
+    provider = os.environ.get("LLM_PROVIDER", "gemini_enterprise").strip().lower() or "gemini_enterprise"
+    if provider not in VALID_LLM_PROVIDERS:
+        raise RuntimeError(f"Unsupported LLM_PROVIDER: {provider!r}. Expected one of {sorted(VALID_LLM_PROVIDERS)}.")
+
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+    if not project:
+        raise RuntimeError(
+            "GOOGLE_CLOUD_PROJECT is missing from the environment. This is the "
+            "enterprise-controlled Google Cloud project ID -- ask your platform "
+            "team for the correct value; it is not something to guess."
+        )
+
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "").strip()
+    if not location:
+        raise RuntimeError(
+            "GOOGLE_CLOUD_LOCATION is missing from the environment (e.g. 'us-central1'). "
+            "This is enterprise-controlled -- ask your platform team for the correct value."
+        )
+
+    model = os.environ.get("GOOGLE_GENAI_MODEL", "").strip()
+    if not model:
+        raise RuntimeError(
+            "GOOGLE_GENAI_MODEL is missing from the environment. This is the "
+            "enterprise-approved Gemini model name -- ask your platform team "
+            "which model you're allowed to call."
+        )
+
+    api_version = os.environ.get("GOOGLE_GENAI_API_VERSION", "v1").strip() or "v1"
+    if not api_version.startswith("v"):
+        raise RuntimeError(f"Invalid GOOGLE_GENAI_API_VERSION: {api_version!r}. Expected something like 'v1'.")
+
+    temperature = _parse_float(os.environ.get("GOOGLE_GENAI_TEMPERATURE"), 0.2)
+    if not (0.0 <= temperature <= 2.0):
+        raise RuntimeError(f"Invalid GOOGLE_GENAI_TEMPERATURE: {temperature!r}. Expected a value between 0.0 and 2.0.")
+
+    max_output_tokens = _parse_int(os.environ.get("GOOGLE_GENAI_MAX_OUTPUT_TOKENS"), 8192)
+    if max_output_tokens <= 0:
+        raise RuntimeError(f"Invalid GOOGLE_GENAI_MAX_OUTPUT_TOKENS: {max_output_tokens!r}. Expected a positive integer.")
+
+    request_timeout_seconds = _parse_int(os.environ.get("GOOGLE_GENAI_REQUEST_TIMEOUT_SECONDS"), 120)
+    if request_timeout_seconds <= 0:
+        raise RuntimeError(
+            f"Invalid GOOGLE_GENAI_REQUEST_TIMEOUT_SECONDS: {request_timeout_seconds!r}. Expected a positive integer."
+        )
+
+    max_retries = _parse_int(os.environ.get("GOOGLE_GENAI_MAX_RETRIES"), 3)
+    if max_retries < 0:
+        raise RuntimeError(f"Invalid GOOGLE_GENAI_MAX_RETRIES: {max_retries!r}. Expected a non-negative integer.")
+
+    store_audit_content = _parse_bool(os.environ.get("STORE_LLM_AUDIT_CONTENT", "true"), True)
+
+    return GeminiConfig(
+        provider=provider,
+        project=project,
+        location=location,
+        model=model,
+        api_version=api_version,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        request_timeout_seconds=request_timeout_seconds,
+        max_retries=max_retries,
+        store_audit_content=store_audit_content,
+    )
+
+
+@dataclass(frozen=True)
+class SQLiteConfig:
+    """SQLite connection settings. See docs/TESTING_GEMINI_SQLITE_MIGRATION.md."""
+
+    db_path: Path
+    busy_timeout_ms: int
+    journal_mode: str
+    foreign_keys: bool
+    synchronous: str
+    debug: bool
+
+
+def _build_sqlite_config() -> SQLiteConfig:
+    database_backend = os.environ.get("DATABASE_BACKEND", "sqlite").strip().lower() or "sqlite"
+    if database_backend not in VALID_DATABASE_BACKENDS:
+        raise RuntimeError(
+            f"Unsupported DATABASE_BACKEND: {database_backend!r}. Expected one of {sorted(VALID_DATABASE_BACKENDS)}."
+        )
+
+    raw_path = os.environ.get("SQLITE_DB_PATH", "data/dvp_meeting_prep.sqlite3").strip() or "data/dvp_meeting_prep.sqlite3"
+    db_path = Path(raw_path)
+    if not db_path.is_absolute():
+        # Always relative to PROJECT_ROOT, never the current working
+        # directory, for the same reason ENV_FILE resolution is: behavior
+        # must not depend on where a script happens to be invoked from.
+        db_path = PROJECT_ROOT / db_path
+
+    busy_timeout_ms = _parse_int(os.environ.get("SQLITE_BUSY_TIMEOUT_MS"), 10000)
+    if busy_timeout_ms < 0:
+        raise RuntimeError(f"Invalid SQLITE_BUSY_TIMEOUT_MS: {busy_timeout_ms!r}. Expected a non-negative integer.")
+
+    journal_mode = os.environ.get("SQLITE_JOURNAL_MODE", "WAL").strip().upper() or "WAL"
+    if journal_mode not in VALID_SQLITE_JOURNAL_MODES:
+        raise RuntimeError(
+            f"Invalid SQLITE_JOURNAL_MODE: {journal_mode!r}. Expected one of {sorted(VALID_SQLITE_JOURNAL_MODES)}."
+        )
+
+    synchronous = os.environ.get("SQLITE_SYNCHRONOUS", "NORMAL").strip().upper() or "NORMAL"
+    if synchronous not in VALID_SQLITE_SYNCHRONOUS_MODES:
+        raise RuntimeError(
+            f"Invalid SQLITE_SYNCHRONOUS: {synchronous!r}. Expected one of {sorted(VALID_SQLITE_SYNCHRONOUS_MODES)}."
+        )
+
+    return SQLiteConfig(
+        db_path=db_path,
+        busy_timeout_ms=busy_timeout_ms,
+        journal_mode=journal_mode,
+        foreign_keys=_parse_bool(os.environ.get("SQLITE_FOREIGN_KEYS", "true"), True),
+        synchronous=synchronous,
+        debug=_parse_bool(os.environ.get("SQLITE_DEBUG", "false"), False),
+    )
+
+
+@dataclass(frozen=True)
 class Settings:
-    supabase_url: str
-    supabase_secret_key: str
-    supabase_publishable_key: str | None
-    openai_api_key: str
-    openai_model: str
+    database_backend: str
+    sqlite: SQLiteConfig
 
     data_source: str
     app_env: str
     env_file_used: str
     csv_input_path: str | None
     salesforce: SalesforceConfig
-
-    @property
-    def supabase_project_url(self) -> str:
-        return normalize_supabase_url(self.supabase_url)
+    gemini: GeminiConfig
 
 
 def _resolve_env_file_name() -> str:
@@ -243,19 +384,6 @@ def get_settings() -> Settings:
     if env_file_name != ".env":
         load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
-    supabase_secret_key = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
-    supabase_publishable_key = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip() or None
-    openai_api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    openai_model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini").strip() or "gpt-4.1-mini"
-
-    if not supabase_url:
-        raise RuntimeError("SUPABASE_URL is missing from the environment.")
-    if not supabase_secret_key:
-        raise RuntimeError("SUPABASE_SECRET_KEY is missing from the environment.")
-    if not openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing from the environment.")
-
     data_source = os.environ.get("DATA_SOURCE", "salesforce").strip().lower() or "salesforce"
     if data_source not in VALID_DATA_SOURCES:
         raise RuntimeError(f"Unsupported DATA_SOURCE: {data_source!r}. Expected one of {sorted(VALID_DATA_SOURCES)}.")
@@ -264,17 +392,17 @@ def get_settings() -> Settings:
     if app_env not in VALID_APP_ENVS:
         raise RuntimeError(f"Unsupported APP_ENV: {app_env!r}. Expected one of {sorted(VALID_APP_ENVS)}.")
 
+    database_backend = os.environ.get("DATABASE_BACKEND", "sqlite").strip().lower() or "sqlite"
+
     return Settings(
-        supabase_url=supabase_url,
-        supabase_secret_key=supabase_secret_key,
-        supabase_publishable_key=supabase_publishable_key,
-        openai_api_key=openai_api_key,
-        openai_model=openai_model,
+        database_backend=database_backend,
+        sqlite=_build_sqlite_config(),
         data_source=data_source,
         app_env=app_env,
         env_file_used=env_file_name,
         csv_input_path=os.environ.get("CSV_INPUT_PATH", "").strip() or None,
         salesforce=_build_salesforce_config(),
+        gemini=_build_gemini_config(),
     )
 
 

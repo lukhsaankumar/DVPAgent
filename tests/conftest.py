@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import pytest
 
+from dvp_meeting_prep import advisors as advisors_module
 from dvp_meeting_prep import config as config_module
+from dvp_meeting_prep.config import SQLiteConfig
+from dvp_meeting_prep.db import Database
 
 # Every env var get_settings()/_build_salesforce_config() might read. Cleared
 # at the start of `clean_env` so a developer's real shell exports or repo
 # .env files can never leak into a test's expectations.
 _ENV_VARS_TO_CLEAR = [
-    "SUPABASE_URL",
-    "SUPABASE_PUBLISHABLE_KEY",
-    "SUPABASE_SECRET_KEY",
-    "SUPABASE_URI",
-    "OPENAI_API_KEY",
-    "OPENAI_MODEL",
     "DATA_SOURCE",
     "APP_ENV",
     "ENV_FILE",
@@ -45,6 +42,23 @@ _ENV_VARS_TO_CLEAR = [
     "SF_ADVISOR_FIELD_MAP",
     "SF_TASK_FIELD_MAP",
     "CSV_INPUT_PATH",
+    "LLM_PROVIDER",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_GENAI_MODEL",
+    "GOOGLE_GENAI_API_VERSION",
+    "GOOGLE_GENAI_TEMPERATURE",
+    "GOOGLE_GENAI_MAX_OUTPUT_TOKENS",
+    "GOOGLE_GENAI_REQUEST_TIMEOUT_SECONDS",
+    "GOOGLE_GENAI_MAX_RETRIES",
+    "STORE_LLM_AUDIT_CONTENT",
+    "DATABASE_BACKEND",
+    "SQLITE_DB_PATH",
+    "SQLITE_BUSY_TIMEOUT_MS",
+    "SQLITE_JOURNAL_MODE",
+    "SQLITE_FOREIGN_KEYS",
+    "SQLITE_SYNCHRONOUS",
+    "SQLITE_DEBUG",
 ]
 
 
@@ -67,7 +81,41 @@ def clean_env(monkeypatch, tmp_path):
 @pytest.fixture
 def base_env(clean_env):
     """clean_env plus the minimum required vars so get_settings() succeeds."""
-    clean_env.setenv("SUPABASE_URL", "https://example.supabase.co")
-    clean_env.setenv("SUPABASE_SECRET_KEY", "test-secret-key")
-    clean_env.setenv("OPENAI_API_KEY", "test-openai-key")
+    clean_env.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    clean_env.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    clean_env.setenv("GOOGLE_GENAI_MODEL", "gemini-test-model")
     return clean_env
+
+
+@pytest.fixture
+def sqlite_db(tmp_path):
+    """A real SQLite database file under tmp_path, schema already applied.
+
+    Never touches a developer's real database -- db_path always lives under
+    pytest's tmp_path, regardless of SQLITE_DB_PATH/DATABASE_BACKEND in the
+    environment or any real .env file.
+    """
+    config = SQLiteConfig(
+        db_path=tmp_path / "test.sqlite3",
+        busy_timeout_ms=2000,
+        journal_mode="WAL",
+        foreign_keys=True,
+        synchronous="NORMAL",
+        debug=False,
+    )
+    database = Database(config)
+    database.ensure_schema_ready()
+    return database
+
+
+@pytest.fixture(autouse=True)
+def _reset_advisor_name_cache():
+    """advisors.py caches the distinct advisor name list at module scope --
+    reset it around every test so one test's data can never leak into
+    another's list_advisor_names()/search_advisor_names() results.
+    """
+    advisors_module._cache["names"] = None
+    advisors_module._cache["fetched_at"] = 0.0
+    yield
+    advisors_module._cache["names"] = None
+    advisors_module._cache["fetched_at"] = 0.0

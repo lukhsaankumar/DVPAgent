@@ -1,37 +1,11 @@
--- DVP Meeting Prep -- SQLite schema (active database, replacing the archived
--- Postgres/Supabase schema in sql/postgres_schema_legacy.sql).
+-- Migration 0001: initial schema.
 --
--- This file is the complete, idempotent schema for a fresh database: every
--- statement uses IF NOT EXISTS, so running it against an already-current
--- database is a no-op that never drops or deletes anything. It is applied by
--- scripts/init_sqlite.py, which also records it as migration 0001 in
--- schema_migrations (see sql/migrations/0001_initial.sql).
---
--- Translation notes from the original Postgres schema (see
--- docs/TESTING_GEMINI_SQLITE_MIGRATION.md for the full migration writeup):
---   * bigint generated always as identity  -> INTEGER PRIMARY KEY (SQLite
---     rowid alias; AUTOINCREMENT is intentionally omitted -- it is stricter
---     and slower than plain rowid reuse-avoidance, which nothing here needs)
---   * jsonb                                -> TEXT (JSON-encoded)
---   * boolean                              -> INTEGER (0/1)
---   * timestamptz / date                   -> TEXT (UTC ISO-8601)
---   * numeric                              -> REAL
---   * schema-qualified public.*            -> unqualified (SQLite has no schemas)
---   * consultant_scorecard_metrics_v (a Postgres view using jsonb_each_text
---     and regexp_replace, both Postgres-only) is dropped: it was never read
---     by any application code (confirmed by repository-wide search), and its
---     Postgres-specific SQL has no direct SQLite equivalent worth building
---     for an unused view.
+-- Applied and tracked by scripts/init_sqlite.py / db.py's migration runner.
+-- Mirrors sql/schema.sql (the standalone reference copy of the same DDL) --
+-- the schema_migrations table itself is bootstrapped separately by the
+-- runner before any migration file is applied, so it is intentionally not
+-- created here. Idempotent (IF NOT EXISTS everywhere): safe to re-run.
 
-CREATE TABLE IF NOT EXISTS schema_migrations (
-  version INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  applied_at TEXT NOT NULL
-);
-
--- One row per Salesforce Task, denormalized with its Advisor's fields (or one
--- row per .xlsx "WS Team CRM History" line when DATA_SOURCE=csv). Fully
--- replaced on each ingest/extraction run -- see db.py replace_table_atomic().
 CREATE TABLE IF NOT EXISTS salesforce_data (
   id INTEGER PRIMARY KEY,
   advisor_name TEXT NOT NULL,
@@ -59,9 +33,6 @@ CREATE TABLE IF NOT EXISTS salesforce_data (
 CREATE INDEX IF NOT EXISTS salesforce_data_advisor_name_idx
   ON salesforce_data (advisor_name);
 
--- One row per Tableau export line. Deduplicated on content_hash (a SHA-256 of
--- the data fields computed in ingest.py) via INSERT ... ON CONFLICT, so
--- re-uploading the same export is a no-op for rows that already exist.
 CREATE TABLE IF NOT EXISTS tableau_data (
   id INTEGER PRIMARY KEY,
   advisor_name TEXT NOT NULL,
@@ -93,10 +64,6 @@ CREATE INDEX IF NOT EXISTS tableau_data_advisor_name_idx
 CREATE UNIQUE INDEX IF NOT EXISTS tableau_data_content_hash_idx
   ON tableau_data (content_hash);
 
--- Legacy flat mirror of the consultant scorecard. Not read by the meeting
--- prep flow (superseded by consultant_scorecard_monthly/_metric below); kept
--- only because scripts/check_sqlite_tables.py and the original ingest path
--- still populate it, matching pre-migration behavior exactly.
 CREATE TABLE IF NOT EXISTS consultant_scorecard_data (
   id INTEGER PRIMARY KEY,
   advisor_name TEXT NOT NULL,
@@ -129,8 +96,6 @@ CREATE INDEX IF NOT EXISTS consultant_scorecard_data_advisor_name_idx
 CREATE INDEX IF NOT EXISTS consultant_scorecard_data_advisor_number_idx
   ON consultant_scorecard_data (advisor_number);
 
--- Audit copy of every consultant scorecard source row (one per advisor line
--- in the workbook). Deduplicated on content_hash, same pattern as tableau_data.
 CREATE TABLE IF NOT EXISTS consultant_scorecard_raw (
   id INTEGER PRIMARY KEY,
   source_file TEXT NOT NULL,
@@ -153,8 +118,6 @@ CREATE INDEX IF NOT EXISTS consultant_scorecard_raw_advisor_number_idx
 CREATE UNIQUE INDEX IF NOT EXISTS consultant_scorecard_raw_content_hash_idx
   ON consultant_scorecard_raw (content_hash);
 
--- One canonical row per (report_date, advisor_number); ingest.py upserts on
--- that natural key so re-ingesting the same report never duplicates rows.
 CREATE TABLE IF NOT EXISTS consultant_scorecard_monthly (
   id INTEGER PRIMARY KEY,
   source_file TEXT NOT NULL,
@@ -186,9 +149,6 @@ CREATE INDEX IF NOT EXISTS consultant_scorecard_monthly_advisor_name_idx
 CREATE INDEX IF NOT EXISTS consultant_scorecard_monthly_advisor_number_idx
   ON consultant_scorecard_monthly (advisor_number);
 
--- Individual metrics for a scorecard_monthly row. Re-derived (delete + insert
--- for the touched scorecard_ids) on every ingest rather than upserted, since
--- metrics have no natural unique key of their own -- see ingest.py.
 CREATE TABLE IF NOT EXISTS consultant_scorecard_metric (
   id INTEGER PRIMARY KEY,
   scorecard_id INTEGER NOT NULL REFERENCES consultant_scorecard_monthly (id) ON DELETE CASCADE,
@@ -210,7 +170,6 @@ CREATE INDEX IF NOT EXISTS consultant_scorecard_metric_scorecard_id_idx
 CREATE INDEX IF NOT EXISTS consultant_scorecard_metric_group_period_idx
   ON consultant_scorecard_metric (metric_group, metric_period, metric_name);
 
--- Audit log for uploads made through the /upload UI.
 CREATE TABLE IF NOT EXISTS upload_batches (
   id INTEGER PRIMARY KEY,
   source_type TEXT NOT NULL CHECK (source_type IN ('tableau', 'consultant_scorecard')),
@@ -226,9 +185,6 @@ CREATE TABLE IF NOT EXISTS upload_batches (
 CREATE INDEX IF NOT EXISTS upload_batches_uploaded_at_idx
   ON upload_batches (uploaded_at DESC);
 
--- Audit log of every generated meeting-prep document (prompt + response).
--- Populated only when STORE_LLM_AUDIT_CONTENT=true (default true, matching
--- pre-migration behavior) -- see webapp/api.py.
 CREATE TABLE IF NOT EXISTS meeting_prep_documents (
   id INTEGER PRIMARY KEY,
   advisor_name TEXT NOT NULL,

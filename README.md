@@ -127,9 +127,10 @@ use the local `.xlsx` fallback instead (no Salesforce credentials needed).
 
 ```powershell
 # 4. Authenticate to Google Cloud with Application Default Credentials
-#    (one-time, interactive; see "Google ADC setup" below for details)
-gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID   # optional, for gcloud's own default
+#    (one-time, interactive; see "Google ADC setup" below for details).
+#    This wraps the manual commands below: checks gcloud is installed, runs
+#    the login only if ADC isn't already present, and verifies the result.
+.\scripts\setup_google_auth.ps1 -Project YOUR_PROJECT_ID
 ```
 
 ```powershell
@@ -168,7 +169,20 @@ Start-Process http://127.0.0.1:8000
 This app authenticates to Gemini Enterprise using **Google Application
 Default Credentials** -- never an API key, never a manually copied token, and
 the application code never shells out to `gcloud` itself. For local
-development:
+development, the wrapped/idempotent way (verifies `gcloud` is installed,
+skips the login if ADC already exists, then verifies the app's own config):
+
+```powershell
+.\scripts\setup_google_auth.ps1                       # PowerShell (Windows)
+.\scripts\setup_google_auth.ps1 -Project my-gcp-project-id
+```
+
+```bash
+bash scripts/setup_google_auth.sh                      # WSL / Linux / macOS
+bash scripts/setup_google_auth.sh --project my-gcp-project-id
+```
+
+Or run the underlying commands yourself:
 
 ```powershell
 gcloud auth application-default login

@@ -92,6 +92,19 @@ All `SF_*` Salesforce variables and `DATA_SOURCE`/`APP_ENV`/`ENV_FILE`/
 
 ## 4) Google ADC setup (exact commands)
 
+Wrapped/idempotent (checks `gcloud` is installed, skips the login if ADC
+already exists, verifies the result via `check_google_auth.py`):
+
+```powershell
+.\scripts\setup_google_auth.ps1          # PowerShell (Windows)
+```
+
+```bash
+bash scripts/setup_google_auth.sh        # WSL / Linux / macOS
+```
+
+Or the underlying command directly:
+
 ```powershell
 gcloud auth application-default login
 ```

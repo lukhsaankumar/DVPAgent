@@ -329,6 +329,25 @@ def _resolve_env_file_name() -> str:
     return {"sandbox": ".env.sandbox", "production": ".env.production"}.get(app_env_hint, ".env")
 
 
+def _require_valid_api_name(env_var: str, value: str) -> str:
+    """Salesforce object/field API names are alphanumeric + underscores (+ a
+    single '.' for a relationship path like 'Owner.Name') -- never spaces.
+    A space (or another 'SF_...=' embedded in the value) is a strong, unambiguous
+    signal that two lines in the env file got merged into one (a missing
+    newline between them), not a real API name -- catch that here with a
+    clear pointer instead of letting it surface later as a confusing
+    "field does not exist" error from Salesforce itself.
+    """
+    if any(char.isspace() for char in value):
+        raise RuntimeError(
+            f"{env_var}={value!r} contains whitespace, which is never valid in a Salesforce object/field API "
+            "name. This almost always means two lines got merged into one in your env file (a missing newline "
+            f"between {env_var}=... and whatever comes right after it) -- check that file and make sure each "
+            "SF_* variable is on its own line."
+        )
+    return value
+
+
 def _build_salesforce_config() -> SalesforceConfig:
     auth_mode = os.environ.get("SF_AUTH_MODE", "password").strip().lower() or "password"
     if auth_mode not in VALID_SF_AUTH_MODES:
@@ -338,6 +357,23 @@ def _build_salesforce_config() -> SalesforceConfig:
     if activity_start_date is not None:
         activity_start_date = validate_iso_date(activity_start_date)
 
+    advisor_object = _require_valid_api_name(
+        "SF_ADVISOR_OBJECT", os.environ.get("SF_ADVISOR_OBJECT", "Account").strip() or "Account"
+    )
+    advisor_number_field = _require_valid_api_name(
+        "SF_ADVISOR_NUMBER_FIELD",
+        os.environ.get("SF_ADVISOR_NUMBER_FIELD", "Advisor_Number__c").strip() or "Advisor_Number__c",
+    )
+    practice_lookup_field_raw = os.environ.get("SF_PRACTICE_LOOKUP_FIELD", "").strip() or None
+    if practice_lookup_field_raw is not None:
+        _require_valid_api_name("SF_PRACTICE_LOOKUP_FIELD", practice_lookup_field_raw)
+    task_link_field = _require_valid_api_name(
+        "SF_TASK_LINK_FIELD", os.environ.get("SF_TASK_LINK_FIELD", "WhatId").strip() or "WhatId"
+    )
+    opportunity_link_field = _require_valid_api_name(
+        "SF_OPPORTUNITY_LINK_FIELD", os.environ.get("SF_OPPORTUNITY_LINK_FIELD", "AccountId").strip() or "AccountId"
+    )
+
     return SalesforceConfig(
         auth_mode=auth_mode,
         username=os.environ.get("SF_USERNAME", "").strip() or None,
@@ -345,12 +381,11 @@ def _build_salesforce_config() -> SalesforceConfig:
         security_token=os.environ.get("SF_SECURITY_TOKEN") or None,
         access_token=os.environ.get("SF_ACCESS_TOKEN") or None,
         instance_url=os.environ.get("SF_INSTANCE_URL", "").strip() or None,
-        advisor_object=os.environ.get("SF_ADVISOR_OBJECT", "Account").strip() or "Account",
-        advisor_number_field=os.environ.get("SF_ADVISOR_NUMBER_FIELD", "Advisor_Number__c").strip()
-        or "Advisor_Number__c",
-        practice_lookup_field=os.environ.get("SF_PRACTICE_LOOKUP_FIELD", "").strip() or None,
-        task_link_field=os.environ.get("SF_TASK_LINK_FIELD", "WhatId").strip() or "WhatId",
-        opportunity_link_field=os.environ.get("SF_OPPORTUNITY_LINK_FIELD", "AccountId").strip() or "AccountId",
+        advisor_object=advisor_object,
+        advisor_number_field=advisor_number_field,
+        practice_lookup_field=practice_lookup_field_raw,
+        task_link_field=task_link_field,
+        opportunity_link_field=opportunity_link_field,
         advisor_numbers=_parse_csv_list(os.environ.get("SF_ADVISOR_NUMBERS", "17018,34318,34605,21114,20728")),
         task_subjects=_parse_csv_list(os.environ.get("SF_TASK_SUBJECTS", "Call,Virtual Meeting")),
         activity_start_date=activity_start_date,

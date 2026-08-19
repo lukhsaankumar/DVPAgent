@@ -380,9 +380,16 @@ def get_settings() -> Settings:
     # upward from CWD, which would make behavior depend on where a script
     # happens to be invoked from instead of the repo's actual .env files.
     env_file_name = _resolve_env_file_name()
-    load_dotenv(PROJECT_ROOT / env_file_name, override=False)
+    env_file_path = PROJECT_ROOT / env_file_name
+    load_dotenv(env_file_path, override=False)
     if env_file_name != ".env":
         load_dotenv(PROJECT_ROOT / ".env", override=False)
+    # Always printed (not gated behind LOG_LEVEL) -- which env file actually
+    # won is a common source of confusion (APP_ENV/ENV_FILE picks .env vs
+    # .env.sandbox vs .env.production; override=False means an
+    # already-exported shell var always beats any of them) and every script
+    # calls get_settings(), so this one line covers all of them for free.
+    print(f"[CONFIG] Loaded env file: {env_file_path} (exists: {env_file_path.exists()})")
 
     data_source = os.environ.get("DATA_SOURCE", "salesforce").strip().lower() or "salesforce"
     if data_source not in VALID_DATA_SOURCES:

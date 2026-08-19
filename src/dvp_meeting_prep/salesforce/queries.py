@@ -130,6 +130,57 @@ def fetch_advisors(client: Salesforce, described: dict[str, Any], sf_config: Sal
     return records
 
 
+def build_all_advisors_query(described: dict[str, Any], sf_config: SalesforceConfig) -> tuple[str, list[str]]:
+    """Returns (soql, omitted_field_names) for an UNSCOPED advisor query --
+    every record with a populated advisor_number_field, not just the
+    specific SF_ADVISOR_NUMBERS list.
+
+    Only for discovery/comparison tooling (scripts/compare_salesforce_sources.py)
+    where the real advisor number values aren't known ahead of time yet.
+    The normal build_advisor_query() above stays scoped to SF_ADVISOR_NUMBERS
+    for the actual application ingest path, which must not silently pull
+    every record of the advisor object in the org.
+    """
+    preferred = ["Id", "Name", sf_config.advisor_number_field]
+    if sf_config.practice_lookup_field:
+        preferred.append(sf_config.practice_lookup_field)
+    preferred += ADVISOR_BASE_FIELDS
+    preferred += list(sf_config.advisor_field_map.values())
+    preferred += list(sf_config.advisor_extra_fields)
+
+    selection = select_available_fields(described, preferred)
+    for omitted_field, reason in selection.omitted:
+        logger.warning("[ADVISORS-ALL] Omitting preferred field %r: %s", omitted_field, reason)
+
+    if sf_config.advisor_number_field not in selection.available:
+        raise SalesforceMetadataError(
+            f"SF_ADVISOR_NUMBER_FIELD={sf_config.advisor_number_field!r} does not exist on "
+            f"{sf_config.advisor_object}. Run --discover-salesforce to find the correct field name."
+        )
+
+    field_list = ", ".join(_validate_identifier(f) for f in selection.available)
+    object_name = _validate_identifier(sf_config.advisor_object)
+    number_field = _validate_identifier(sf_config.advisor_number_field)
+
+    soql = f"SELECT {field_list} FROM {object_name} WHERE {number_field} != null"
+    return soql, [name for name, _ in selection.omitted]
+
+
+def fetch_all_advisors(client: Salesforce, described: dict[str, Any], sf_config: SalesforceConfig) -> list[dict[str, Any]]:
+    """Unscoped pull of every advisor record with a populated advisor
+    number -- not limited to SF_ADVISOR_NUMBERS. Discovery/comparison
+    tooling only; see build_all_advisors_query()."""
+    soql, _omitted = build_all_advisors_query(described, sf_config)
+    logger.debug("[ADVISORS-ALL] SOQL: %s", soql)
+    with timed_step("ADVISORS-ALL", echo=True) as timer:
+        print("[ADVISORS-ALL] Querying every advisor record with a populated advisor number (unscoped)")
+        result = with_retries(lambda: client.query_all(soql), step_name="fetch_all_advisors")
+        records = list(result.get("records", []))
+    print(f"[ADVISORS-ALL] Retrieved {len(records)} records")
+    logger.info("[ADVISORS-ALL] returned=%d duration=%.2fs", len(records), timer.duration_seconds)
+    return records
+
+
 @dataclass
 class ScopeResolution:
     number_to_advisor: dict[str, dict[str, Any]] = field(default_factory=dict)

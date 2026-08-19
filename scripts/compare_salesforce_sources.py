@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sys
 
@@ -10,13 +12,15 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from dvp_meeting_prep.config import configure_logging, get_settings
+from dvp_meeting_prep.config import PROJECT_ROOT, configure_logging, get_settings
 from dvp_meeting_prep.files import read_salesforce_rows
-from dvp_meeting_prep.salesforce.extraction import run_extraction
+from dvp_meeting_prep.salesforce import client as sf_client
+from dvp_meeting_prep.salesforce import metadata as sf_metadata
+from dvp_meeting_prep.salesforce import queries as sf_queries
 
 # Advisor-level fields are joined from the Advisor record onto every Task row
-# for that advisor, so they should be identical across all of an advisor's
-# rows -- a straight value comparison (first row from each source) is
+# for that advisor in the normal ingest path, so they should be identical
+# across all of an advisor's rows -- a straight value comparison is
 # meaningful here.
 ADVISOR_LEVEL_FIELDS = [
     "advisor_name",
@@ -30,29 +34,51 @@ ADVISOR_LEVEL_FIELDS = [
     "assigned",
 ]
 
-# Task-level fields vary per row -- row order/count can legitimately differ
-# between a live extraction and a point-in-time manual export, so these are
-# compared as sets rather than a single value.
-TASK_LEVEL_FIELDS = [
-    "subject",
-    "task_subtype",
-    "interaction_type",
-    "status",
-    "completed_date_time",
-]
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compare live Salesforce sandbox data against a manually-provided legacy spreadsheet, "
-        "advisor by advisor: which advisors match, and where their field values differ."
+        description="Pull every advisor record from the live Salesforce sandbox (not just a fixed list of "
+        "advisor numbers), print all of it, and compare against a manually-provided legacy spreadsheet for "
+        "overlap and field differences."
     )
     parser.add_argument(
         "legacy_file",
         help="Path to the manual Salesforce spreadsheet (.xlsx/.xlsm only -- re-save a .xlsb as .xlsx first; "
         "openpyxl cannot read .xlsb directly).",
     )
+    parser.add_argument(
+        "--dump-file",
+        default=None,
+        help="Where to write the full raw Salesforce pull as JSON (default: "
+        ".salesforce_debug/compare_pull_<timestamp>.json, gitignored).",
+    )
     return parser
+
+
+def _relationship_value(record: dict, dotted_field: str):
+    """Resolve a possibly-dotted relationship field (e.g. 'Owner.Name')
+    against a raw Salesforce record, which simple_salesforce returns as a
+    nested dict for relationship fields."""
+    value = record
+    for part in dotted_field.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _map_to_legacy_shape(record: dict, advisor_number_field: str, advisor_field_map: dict[str, str]) -> dict:
+    """Map a raw Account/advisor record into the same legacy-row column
+    names used by files.read_salesforce_rows(), using the configured
+    advisor_field_map so both sides of the comparison speak the same
+    vocabulary."""
+    mapped = {
+        "advisor_name": record.get("Name"),
+        "advisor_number": record.get(advisor_number_field),
+    }
+    for legacy_column, real_field in advisor_field_map.items():
+        mapped[legacy_column] = _relationship_value(record, real_field)
+    return mapped
 
 
 def _index_by_advisor_number(rows: list[dict]) -> dict[str, list[dict]]:
@@ -74,14 +100,11 @@ def _diff_advisor_fields(live_row: dict, legacy_row: dict) -> list[tuple[str, ob
     return diffs
 
 
-def _task_value_set(rows: list[dict], field: str) -> set[str]:
-    return {str(row.get(field)).strip() for row in rows if row.get(field) not in (None, "")}
-
-
 def main() -> int:
     args = build_parser().parse_args()
     configure_logging()
     settings = get_settings()
+    sf_config = settings.salesforce
 
     legacy_path = Path(args.legacy_file)
     if not legacy_path.exists():
@@ -95,14 +118,37 @@ def main() -> int:
         )
         return 2
 
-    print(f"[LIVE] Connecting to Salesforce ({settings.app_env}) and pulling advisor/task data...")
-    live_result = run_extraction(settings, dry_run=True)
-    live_rows = live_result.legacy_rows
-    live_by_advisor = _index_by_advisor_number(live_rows)
-    print(f"[LIVE] {len(live_rows)} rows across {len(live_by_advisor)} advisor(s)")
+    print(f"[LIVE] Connecting to Salesforce ({settings.app_env})...")
+    client = sf_client.connect(sf_config, settings.app_env)
+    advisor_described = sf_metadata.describe_object(client, sf_config.advisor_object)
 
-    print(f"[LEGACY] Parsing {legacy_path}...")
+    print("[LIVE] Pulling EVERY advisor record with a populated advisor number (unscoped -- not just SF_ADVISOR_NUMBERS)...")
+    raw_records = sf_queries.fetch_all_advisors(client, advisor_described, sf_config)
+
+    print(f"\n{'=' * 70}")
+    print(f"[LIVE] Full pull: {len(raw_records)} advisor record(s) from {sf_config.advisor_object}")
+    print(f"{'=' * 70}")
+    live_rows = [_map_to_legacy_shape(r, sf_config.advisor_number_field, sf_config.advisor_field_map) for r in raw_records]
+    for row in sorted(live_rows, key=lambda r: str(r.get("advisor_number") or "")):
+        print(f"  {row.get('advisor_number')!s:>12}  {row.get('advisor_name')}")
+        for field in ADVISOR_LEVEL_FIELDS[1:]:  # skip advisor_name, already printed
+            value = row.get(field)
+            if value not in (None, ""):
+                print(f"      {field}: {value}")
+
+    dump_path = Path(args.dump_file) if args.dump_file else None
+    if dump_path is None:
+        debug_dir = PROJECT_ROOT / ".salesforce_debug"
+        debug_dir.mkdir(exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dump_path = debug_dir / f"compare_pull_{stamp}.json"
+    dump_path.parent.mkdir(parents=True, exist_ok=True)
+    dump_path.write_text(json.dumps(live_rows, indent=2, default=str), encoding="utf-8")
+    print(f"\n[LIVE] Full pull also written to {dump_path} (gitignored -- may contain real advisor data)")
+
+    print(f"\n[LEGACY] Parsing {legacy_path}...")
     legacy_rows = read_salesforce_rows(legacy_path)
+    live_by_advisor = _index_by_advisor_number(live_rows)
     legacy_by_advisor = _index_by_advisor_number(legacy_rows)
     print(f"[LEGACY] {len(legacy_rows)} rows across {len(legacy_by_advisor)} advisor(s)")
 
@@ -113,42 +159,48 @@ def main() -> int:
             matched.append(advisor_number)
         else:
             not_in_legacy.append(advisor_number)
+    not_in_live = sorted(n for n in legacy_by_advisor if n not in live_by_advisor)
 
     print(f"\n{'=' * 70}")
-    print(f"SUMMARY: {len(live_by_advisor)} advisor(s) in live Salesforce, {len(matched)} also found in the legacy file")
+    print(
+        f"SUMMARY: {len(live_by_advisor)} advisor(s) live in Salesforce, {len(legacy_by_advisor)} advisor(s) "
+        f"in the legacy file, {len(matched)} overlap"
+    )
     print(f"{'=' * 70}\n")
 
-    if not_in_legacy:
-        print("[NOT IN LEGACY FILE]")
-        for advisor_number in not_in_legacy:
+    if matched:
+        print("[OVERLAP -- in both Salesforce and the legacy file]")
+        for advisor_number in matched:
             name = live_by_advisor[advisor_number][0].get("advisor_name")
             print(f"  {advisor_number}  {name}")
         print()
 
+    if not_in_legacy:
+        print(f"[IN SALESFORCE, NOT IN LEGACY FILE] ({len(not_in_legacy)})")
+        for advisor_number in not_in_legacy[:50]:
+            name = live_by_advisor[advisor_number][0].get("advisor_name")
+            print(f"  {advisor_number}  {name}")
+        if len(not_in_legacy) > 50:
+            print(f"  ... and {len(not_in_legacy) - 50} more (see the full dump file for the complete list)")
+        print()
+
+    if not_in_live:
+        print(f"[IN LEGACY FILE, NOT IN SALESFORCE] ({len(not_in_live)})")
+        for advisor_number in not_in_live[:50]:
+            name = legacy_by_advisor[advisor_number][0].get("advisor_name")
+            print(f"  {advisor_number}  {name}")
+        if len(not_in_live) > 50:
+            print(f"  ... and {len(not_in_live) - 50} more")
+        print()
+
     for advisor_number in matched:
-        live_advisor_rows = live_by_advisor[advisor_number]
-        legacy_advisor_rows = legacy_by_advisor[advisor_number]
-        name = live_advisor_rows[0].get("advisor_name")
-
-        print(f"[MATCH] {advisor_number}  {name}")
-        print(f"  rows: live={len(live_advisor_rows)}  legacy={len(legacy_advisor_rows)}")
-
-        field_diffs = _diff_advisor_fields(live_advisor_rows[0], legacy_advisor_rows[0])
+        live_row = live_by_advisor[advisor_number][0]
+        legacy_row = legacy_by_advisor[advisor_number][0]
+        field_diffs = _diff_advisor_fields(live_row, legacy_row)
         if field_diffs:
-            print("  advisor-level field differences:")
+            print(f"[FIELD DIFFERENCES] {advisor_number} {live_row.get('advisor_name')}")
             for field, live_value, legacy_value in field_diffs:
                 print(f"    {field}: live={live_value!r}  legacy={legacy_value!r}")
-        else:
-            print("  advisor-level fields: identical")
-
-        for field in TASK_LEVEL_FIELDS:
-            live_values = _task_value_set(live_advisor_rows, field)
-            legacy_values = _task_value_set(legacy_advisor_rows, field)
-            only_live = live_values - legacy_values
-            only_legacy = legacy_values - live_values
-            if only_live or only_legacy:
-                print(f"  {field} -- only in live: {sorted(only_live)}  only in legacy: {sorted(only_legacy)}")
-        print()
 
     return 0
 

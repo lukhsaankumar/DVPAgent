@@ -180,6 +180,14 @@ def generate_meeting_prep(prompt: str) -> str:
         temperature=gemini.temperature,
         max_output_tokens=gemini.max_output_tokens,
         response_mime_type="text/plain",
+        # This app has no function-calling tools configured, so automatic
+        # function calling is never actually used -- disabling it explicitly
+        # also silences a newer google-genai SDK warning ("Direct use of
+        # automatic function calling (AFC) in Models.generate_content is not
+        # recommended...") that otherwise logs once per process the first
+        # time generate_content() is called, since AFC defaults to "on" for
+        # that method even when no tools are configured.
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
     )
 
     prompt_chars = len(prompt)

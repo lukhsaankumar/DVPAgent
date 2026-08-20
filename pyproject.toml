@@ -35,3 +35,11 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# e2e_smoke_test.py is a manual Playwright script (run directly: `python
+# tests/e2e_smoke_test.py`), not part of the automated suite -- it needs
+# requirements-dev.txt installed, which the automated suite doesn't. Its
+# *_test.py name makes pytest try to collect it by default; without this it
+# fails collection (ModuleNotFoundError: playwright) for anyone who hasn't
+# installed requirements-dev.txt, even though `python -m pytest tests/` was
+# never meant to run it.
+addopts = ["--ignore=tests/e2e_smoke_test.py"]

@@ -16,7 +16,6 @@ from simple_salesforce import format_soql
 
 from dvp_meeting_prep.config import configure_logging, get_settings
 from dvp_meeting_prep.salesforce import client as sf_client
-from dvp_meeting_prep.salesforce import metadata as sf_metadata
 from dvp_meeting_prep.salesforce.client import with_retries
 
 # name -> the number it's expected to correspond to, per what's actually
@@ -65,18 +64,21 @@ def main() -> int:
 
     print(f"[LIVE] Connecting to Salesforce ({settings.app_env})...")
     client = sf_client.connect(sf_config, settings.app_env)
-    described = sf_metadata.describe_object(client, sf_config.advisor_object)
-    all_field_names = [f["name"] for f in described.get("fields", []) if f.get("name")]
-    field_list = ", ".join(all_field_names)
+    sobject = getattr(client, sf_config.advisor_object)
 
     for name, expected_number in pairs.items():
         print(f"\n{'=' * 78}")
         print(f"[SEARCH] {sf_config.advisor_object}.Name = {name!r} (expecting number {expected_number!r} somewhere)")
         print(f"{'=' * 78}")
 
-        soql = format_soql(f"SELECT {field_list} FROM {sf_config.advisor_object} WHERE Name = {{name}}", name=name)
+        # Small, safe query -- just Id/Name, never every field, so this
+        # never risks the "URL/header too large" error a full-field SELECT
+        # can hit on an object with 100+ fields (as this one has).
+        soql = format_soql(
+            f"SELECT Id, Name FROM {sf_config.advisor_object} WHERE Name = {{name}}", name=name
+        )
         try:
-            result = with_retries(lambda soql=soql: client.query(soql), step_name="inspect_by_name")
+            result = with_retries(lambda soql=soql: client.query(soql), step_name="find_by_name")
         except Exception as exc:  # noqa: BLE001 -- report and continue to the next name
             print(f"[ERROR] Query failed: {exc}")
             continue
@@ -86,14 +88,24 @@ def main() -> int:
             print(f"[NOT FOUND] No {sf_config.advisor_object} record with Name = {name!r} at all.")
             continue
 
-        for record in records:
-            record_id = record.get("Id")
+        for stub in records:
+            record_id = stub.get("Id")
             print(f"\n[RECORD] Id={record_id}")
+
+            # Fetch every field on this one record via GET .../{object}/{id}
+            # -- no field list in the URL at all, so this can't hit the same
+            # 431 that a full-field SELECT did.
+            try:
+                full_record = with_retries(
+                    lambda record_id=record_id: sobject.get(record_id), step_name="get_full_record"
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ERROR] Could not fetch full record {record_id}: {exc}")
+                continue
+
             matches = []
-            for field_name, value in record.items():
-                if field_name in ("attributes", "Id"):
-                    continue
-                if value is None:
+            for field_name, value in full_record.items():
+                if field_name in ("attributes",) or value is None:
                     continue
                 if str(value).strip() == expected_number:
                     matches.append(field_name)
@@ -103,7 +115,7 @@ def main() -> int:
             else:
                 print(f"[NOT FOUND] Number {expected_number!r} does not appear in any field on this record.")
                 print("[DUMP] Non-empty fields on this record:")
-                for field_name, value in sorted(record.items()):
+                for field_name, value in sorted(full_record.items()):
                     if field_name in ("attributes",) or value in (None, ""):
                         continue
                     print(f"    {field_name}: {value!r}")

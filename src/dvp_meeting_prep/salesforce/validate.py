@@ -66,7 +66,10 @@ def run_validation(
     _check_count(report, "Opportunities", sf_config.expected_opportunity_count, len(opportunity_records))
 
     if scope.missing_numbers:
-        msg = f"Advisor numbers requested but not found in Salesforce: {scope.missing_numbers}"
+        msg = (
+            f"Advisor {sf_config.advisor_lookup_field} values requested (SF_ADVISOR_LOOKUP_VALUES) "
+            f"but not found in Salesforce: {scope.missing_numbers}"
+        )
         logger.warning("[VALIDATION] %s", msg)
         report.problems.append(msg)
 

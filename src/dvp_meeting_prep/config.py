@@ -144,6 +144,15 @@ class SalesforceConfig:
     opportunity_link_field: str
 
     advisor_numbers: tuple[str, ...]
+    # By default, advisor selection/scoping uses advisor_number_field +
+    # advisor_numbers (unchanged). Set SF_ADVISOR_LOOKUP_FIELD (e.g. "Name")
+    # to select advisors a different way instead -- useful when the
+    # configured number field turns out not to be reliably populated for
+    # real advisor records in a given org, but another field (or Name) is.
+    # advisor_lookup_field/advisor_lookup_values default to
+    # advisor_number_field/advisor_numbers when not set.
+    advisor_lookup_field: str
+    advisor_lookup_values: tuple[str, ...]
     task_subjects: tuple[str, ...]
     activity_start_date: str | None
 
@@ -378,6 +387,16 @@ def _build_salesforce_config() -> SalesforceConfig:
     opportunity_link_field = _require_valid_api_name(
         "SF_OPPORTUNITY_LINK_FIELD", os.environ.get("SF_OPPORTUNITY_LINK_FIELD", "AccountId").strip() or "AccountId"
     )
+    advisor_numbers = _parse_csv_list(os.environ.get("SF_ADVISOR_NUMBERS", "17018,34318,34605,21114,20728"))
+
+    advisor_lookup_field_raw = os.environ.get("SF_ADVISOR_LOOKUP_FIELD", "").strip()
+    advisor_lookup_field = (
+        _require_valid_api_name("SF_ADVISOR_LOOKUP_FIELD", advisor_lookup_field_raw)
+        if advisor_lookup_field_raw
+        else advisor_number_field
+    )
+    advisor_lookup_values_raw = os.environ.get("SF_ADVISOR_LOOKUP_VALUES", "").strip()
+    advisor_lookup_values = _parse_csv_list(advisor_lookup_values_raw) if advisor_lookup_values_raw else advisor_numbers
 
     return SalesforceConfig(
         auth_mode=auth_mode,
@@ -391,7 +410,9 @@ def _build_salesforce_config() -> SalesforceConfig:
         practice_lookup_field=practice_lookup_field_raw,
         task_link_field=task_link_field,
         opportunity_link_field=opportunity_link_field,
-        advisor_numbers=_parse_csv_list(os.environ.get("SF_ADVISOR_NUMBERS", "17018,34318,34605,21114,20728")),
+        advisor_numbers=advisor_numbers,
+        advisor_lookup_field=advisor_lookup_field,
+        advisor_lookup_values=advisor_lookup_values,
         task_subjects=_parse_csv_list(os.environ.get("SF_TASK_SUBJECTS", "Call,Virtual Meeting")),
         activity_start_date=activity_start_date,
         expected_advisor_count=_parse_int(os.environ.get("SF_EXPECTED_ADVISOR_COUNT"), 5),

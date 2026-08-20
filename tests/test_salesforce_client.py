@@ -35,6 +35,8 @@ def _sf_config(**overrides) -> SalesforceConfig:
         task_field_map={},
     )
     base.update(overrides)
+    base.setdefault("advisor_lookup_field", base["advisor_number_field"])
+    base.setdefault("advisor_lookup_values", base["advisor_numbers"])
     return SalesforceConfig(**base)
 
 

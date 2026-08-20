@@ -25,21 +25,34 @@ DEFAULT_EXPECTED = {
     "Mathis Turcotte": "34318",
     "Tamar Eisenberg": "34605",
     "Martin Leroux": "21114",
-    "Olivier Champagne": "20728",
     "James Carney": "20728",
 }
+
+# Lookup fields on the Account record worth following to a related User
+# record and checking there too -- every Account dumped so far has both
+# populated, and "Field_User__c" (paired with Field_User_Persona__c='Advisor')
+# strongly suggests the actual advisor identity/number lives on that User,
+# not the Account (which looks like it represents the practice/book of
+# business instead).
+RELATED_USER_LOOKUP_FIELDS = ["Field_User__c", "OwnerId"]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Pull the full Account record for specific named advisors and search every field for the "
-        "expected advisor number -- for when filtering by a specific number field returns nothing, to find out "
-        "whether the number lives in a different field (or nowhere at all) rather than guessing at more field names."
+        description="Pull the full Account record (and its related User, via Field_User__c/OwnerId) for specific "
+        "named advisors, and search every field on both for the expected advisor number -- for when filtering by "
+        "a specific number field returns nothing, to find out where the number actually lives rather than "
+        "guessing at more field names."
     )
     parser.add_argument(
         "--pairs",
         default=None,
         help='Override the built-in name=number list, comma-separated, e.g. "Scott Syrja=17018,Mathis Turcotte=34318".',
+    )
+    parser.add_argument(
+        "--skip-users",
+        action="store_true",
+        help="Only check the Account record, don't follow Field_User__c/OwnerId to the related User record.",
     )
     return parser
 
@@ -55,6 +68,44 @@ def _parse_pairs(raw: str | None) -> dict[str, str]:
     return pairs
 
 
+def _fields_matching(record: dict, expected_number: str) -> list[str]:
+    matches = []
+    for field_name, value in record.items():
+        if field_name in ("attributes",) or value is None:
+            continue
+        if str(value).strip() == expected_number:
+            matches.append(field_name)
+    return matches
+
+
+def _dump_non_empty_fields(record: dict) -> None:
+    for field_name, value in sorted(record.items()):
+        if field_name in ("attributes",) or value in (None, ""):
+            continue
+        print(f"    {field_name}: {value!r}")
+
+
+def _check_record(client, object_name: str, record_id: str, expected_number: str, label: str) -> bool:
+    """Fetch one record by Id, search it for expected_number, print the
+    result. Returns True if found."""
+    sobject = getattr(client, object_name)
+    try:
+        full_record = with_retries(lambda: sobject.get(record_id), step_name=f"get_{object_name}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ERROR] Could not fetch {label} ({object_name} {record_id}): {exc}")
+        return False
+
+    matches = _fields_matching(full_record, expected_number)
+    if matches:
+        print(f"[FOUND] Number {expected_number!r} found on {label} in field(s): {matches}")
+        return True
+
+    print(f"[NOT FOUND] Number {expected_number!r} not on {label}.")
+    print(f"[DUMP] Non-empty fields on {label}:")
+    _dump_non_empty_fields(full_record)
+    return False
+
+
 def main() -> int:
     args = build_parser().parse_args()
     configure_logging()
@@ -64,18 +115,20 @@ def main() -> int:
 
     print(f"[LIVE] Connecting to Salesforce ({settings.app_env})...")
     client = sf_client.connect(sf_config, settings.app_env)
-    sobject = getattr(client, sf_config.advisor_object)
 
     for name, expected_number in pairs.items():
         print(f"\n{'=' * 78}")
         print(f"[SEARCH] {sf_config.advisor_object}.Name = {name!r} (expecting number {expected_number!r} somewhere)")
         print(f"{'=' * 78}")
 
-        # Small, safe query -- just Id/Name, never every field, so this
-        # never risks the "URL/header too large" error a full-field SELECT
-        # can hit on an object with 100+ fields (as this one has).
+        # Small, safe query -- just Id/Name (+ the related-User lookup
+        # fields), never every field, so this never risks the "URL/header
+        # too large" error a full-field SELECT can hit on an object with
+        # 100+ fields (as this one has).
+        lookup_fields = ", ".join(RELATED_USER_LOOKUP_FIELDS) if not args.skip_users else ""
+        select_fields = f"Id, Name{', ' + lookup_fields if lookup_fields else ''}"
         soql = format_soql(
-            f"SELECT Id, Name FROM {sf_config.advisor_object} WHERE Name = {{name}}", name=name
+            f"SELECT {select_fields} FROM {sf_config.advisor_object} WHERE Name = {{name}}", name=name
         )
         try:
             result = with_retries(lambda soql=soql: client.query(soql), step_name="find_by_name")
@@ -90,35 +143,21 @@ def main() -> int:
 
         for stub in records:
             record_id = stub.get("Id")
-            print(f"\n[RECORD] Id={record_id}")
+            print(f"\n[RECORD] {sf_config.advisor_object} Id={record_id}")
 
-            # Fetch every field on this one record via GET .../{object}/{id}
-            # -- no field list in the URL at all, so this can't hit the same
-            # 431 that a full-field SELECT did.
-            try:
-                full_record = with_retries(
-                    lambda record_id=record_id: sobject.get(record_id), step_name="get_full_record"
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(f"[ERROR] Could not fetch full record {record_id}: {exc}")
+            found = _check_record(client, sf_config.advisor_object, record_id, expected_number, "the Account record")
+            if found or args.skip_users:
                 continue
 
-            matches = []
-            for field_name, value in full_record.items():
-                if field_name in ("attributes",) or value is None:
+            checked_user_ids: set[str] = set()
+            for lookup_field in RELATED_USER_LOOKUP_FIELDS:
+                user_id = stub.get(lookup_field)
+                if not user_id or user_id in checked_user_ids:
                     continue
-                if str(value).strip() == expected_number:
-                    matches.append(field_name)
-
-            if matches:
-                print(f"[FOUND] Number {expected_number!r} found in field(s): {matches}")
-            else:
-                print(f"[NOT FOUND] Number {expected_number!r} does not appear in any field on this record.")
-                print("[DUMP] Non-empty fields on this record:")
-                for field_name, value in sorted(full_record.items()):
-                    if field_name in ("attributes",) or value in (None, ""):
-                        continue
-                    print(f"    {field_name}: {value!r}")
+                checked_user_ids.add(user_id)
+                print(f"\n[FOLLOW] {lookup_field} -> User {user_id}")
+                if _check_record(client, "User", user_id, expected_number, f"the related User ({lookup_field})"):
+                    break
 
     return 0
 

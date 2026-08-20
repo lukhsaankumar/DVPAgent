@@ -83,8 +83,19 @@ def _require_non_empty(values: list[str], what: str) -> None:
 
 
 def build_advisor_query(described: dict[str, Any], sf_config: SalesforceConfig) -> tuple[str, list[str]]:
-    """Returns (soql, omitted_field_names) for the advisor/practice lookup query."""
-    preferred = ["Id", "Name", sf_config.advisor_number_field]
+    """Returns (soql, omitted_field_names) for the advisor/practice lookup query.
+
+    Which advisors get selected is controlled by advisor_lookup_field /
+    advisor_lookup_values (defaulting to advisor_number_field / advisor_numbers
+    when SF_ADVISOR_LOOKUP_FIELD isn't set -- unchanged behavior). This split
+    exists because advisor_number_field isn't guaranteed to be populated for
+    every real advisor record in every org; when it isn't, pointing
+    SF_ADVISOR_LOOKUP_FIELD at a field that reliably *is* populated (e.g.
+    "Name") is how selection still works. advisor_number_field is still
+    requested in the SELECT list (best-effort, to populate the advisor_number
+    output column) but is not required to exist -- only advisor_lookup_field is.
+    """
+    preferred = ["Id", "Name", sf_config.advisor_number_field, sf_config.advisor_lookup_field]
     if sf_config.practice_lookup_field:
         preferred.append(sf_config.practice_lookup_field)
     preferred += ADVISOR_BASE_FIELDS
@@ -95,20 +106,20 @@ def build_advisor_query(described: dict[str, Any], sf_config: SalesforceConfig) 
     for omitted_field, reason in selection.omitted:
         logger.warning("[ADVISORS] Omitting preferred field %r: %s", omitted_field, reason)
 
-    if sf_config.advisor_number_field not in selection.available:
+    if sf_config.advisor_lookup_field not in selection.available:
         raise SalesforceMetadataError(
-            f"SF_ADVISOR_NUMBER_FIELD={sf_config.advisor_number_field!r} does not exist on "
+            f"SF_ADVISOR_LOOKUP_FIELD={sf_config.advisor_lookup_field!r} does not exist on "
             f"{sf_config.advisor_object}. Run --discover-salesforce to find the correct field name."
         )
-    _require_non_empty(list(sf_config.advisor_numbers), "SF_ADVISOR_NUMBERS")
+    _require_non_empty(list(sf_config.advisor_lookup_values), "SF_ADVISOR_LOOKUP_VALUES/SF_ADVISOR_NUMBERS")
 
     field_list = ", ".join(_validate_identifier(f) for f in selection.available)
     object_name = _validate_identifier(sf_config.advisor_object)
-    number_field = _validate_identifier(sf_config.advisor_number_field)
+    lookup_field = _validate_identifier(sf_config.advisor_lookup_field)
 
     soql = format_soql(
-        f"SELECT {field_list} FROM {object_name} WHERE {number_field} IN {{numbers}}",
-        numbers=[n.strip() for n in sf_config.advisor_numbers],
+        f"SELECT {field_list} FROM {object_name} WHERE {lookup_field} IN {{values}}",
+        values=[v.strip() for v in sf_config.advisor_lookup_values],
     )
     return soql, [name for name, _ in selection.omitted]
 
@@ -191,15 +202,23 @@ class ScopeResolution:
 
 
 def resolve_scope(advisor_records: list[dict[str, Any]], sf_config: SalesforceConfig) -> ScopeResolution:
-    """Map each configured advisor number to its Salesforce record and the
+    """Map each configured advisor lookup value (advisor number, or Name when
+    SF_ADVISOR_LOOKUP_FIELD=Name) to its Salesforce record and the
     relationship scope ID used to query Tasks/Opportunities (the Practice
     lookup target when configured, otherwise the Advisor record ID itself).
+
+    Matching against the requested list is case-insensitive: when the lookup
+    field is Name, "Scott Syrja" (as configured) and "SCOTT SYRJA" (as
+    returned by Salesforce, or vice versa) must resolve to the same advisor,
+    same as the case-insensitive matching already used elsewhere in this
+    codebase for cross-source advisor-name joins.
     """
     resolution = ScopeResolution()
     seen_numbers: dict[str, int] = {}
+    casefold_to_key: dict[str, str] = {}
 
     for record in advisor_records:
-        number = record.get(sf_config.advisor_number_field)
+        number = record.get(sf_config.advisor_lookup_field)
         if number is None:
             continue
         number = str(number).strip()
@@ -207,6 +226,7 @@ def resolve_scope(advisor_records: list[dict[str, Any]], sf_config: SalesforceCo
         if number in resolution.number_to_advisor:
             continue
         resolution.number_to_advisor[number] = record
+        casefold_to_key[number.casefold()] = number
 
         if sf_config.practice_lookup_field:
             scope_id = record.get(sf_config.practice_lookup_field)
@@ -215,8 +235,8 @@ def resolve_scope(advisor_records: list[dict[str, Any]], sf_config: SalesforceCo
         if scope_id:
             resolution.number_to_scope_id[number] = scope_id
 
-    requested = [n.strip() for n in sf_config.advisor_numbers]
-    resolution.missing_numbers = [n for n in requested if n not in resolution.number_to_advisor]
+    requested = [n.strip() for n in sf_config.advisor_lookup_values]
+    resolution.missing_numbers = [n for n in requested if n.casefold() not in casefold_to_key]
     resolution.duplicate_numbers = [n for n, count in seen_numbers.items() if count > 1]
     resolution.scope_ids = sorted(set(resolution.number_to_scope_id.values()))
 

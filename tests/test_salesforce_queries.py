@@ -36,6 +36,12 @@ def _sf_config(**overrides) -> SalesforceConfig:
         task_field_map={},
     )
     base.update(overrides)
+    # Mirrors the real default-mirroring logic in config.py:
+    # _build_salesforce_config() -- advisor_lookup_field/advisor_lookup_values
+    # default to advisor_number_field/advisor_numbers unless a test overrides
+    # them explicitly.
+    base.setdefault("advisor_lookup_field", base["advisor_number_field"])
+    base.setdefault("advisor_lookup_values", base["advisor_numbers"])
     return SalesforceConfig(**base)
 
 
@@ -121,6 +127,30 @@ def test_advisor_query_empty_numbers_list_raises():
         sf_queries.build_advisor_query(ACCOUNT_DESCRIBED, config)
 
 
+def test_advisor_query_by_name_when_lookup_field_overridden():
+    config = _sf_config(
+        advisor_lookup_field="Name",
+        advisor_lookup_values=("Scott Syrja", "Mathis Turcotte"),
+    )
+    soql, _omitted = sf_queries.build_advisor_query(ACCOUNT_DESCRIBED, config)
+    assert " FROM Account WHERE Name IN " in soql
+    assert "Scott Syrja" in soql
+
+
+def test_advisor_query_name_lookup_does_not_require_number_field():
+    # advisor_number_field is still requested (best-effort, to populate the
+    # advisor_number output column) but must not block extraction when it
+    # doesn't exist on the object -- only advisor_lookup_field is required.
+    config = _sf_config(
+        advisor_number_field="Nonexistent__c",
+        advisor_lookup_field="Name",
+        advisor_lookup_values=("Scott Syrja",),
+    )
+    soql, omitted = sf_queries.build_advisor_query(ACCOUNT_DESCRIBED, config)
+    assert " FROM Account WHERE Name IN " in soql
+    assert "Nonexistent__c" in omitted
+
+
 def test_fetch_advisors_uses_query_all():
     client = MagicMock()
     client.query_all.return_value = {"records": [{"Id": "001", "Name": "Test Advisor"}]}
@@ -161,6 +191,27 @@ def test_duplicate_advisor_number_is_reported():
     ]
     scope = sf_queries.resolve_scope(advisors, config)
     assert scope.duplicate_numbers == ["17018"]
+
+
+def test_resolve_scope_by_name_when_lookup_field_overridden():
+    config = _sf_config(
+        advisor_lookup_field="Name",
+        advisor_lookup_values=("Scott Syrja",),
+    )
+    advisors = [{"Id": "001", "Name": "Scott Syrja", "Advisor_Number__c": None}]
+    scope = sf_queries.resolve_scope(advisors, config)
+    assert scope.number_to_advisor["Scott Syrja"]["Id"] == "001"
+    assert scope.missing_numbers == []
+
+
+def test_resolve_scope_by_name_is_case_insensitive():
+    config = _sf_config(
+        advisor_lookup_field="Name",
+        advisor_lookup_values=("scott syrja",),
+    )
+    advisors = [{"Id": "001", "Name": "Scott Syrja"}]
+    scope = sf_queries.resolve_scope(advisors, config)
+    assert scope.missing_numbers == []
 
 
 # --- Task query ----------------------------------------------------------------

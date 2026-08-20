@@ -287,6 +287,8 @@ wrong domain and fails).
 | `SF_TASK_LINK_FIELD` | `WhatId` | Field on Task linking it to the resolved scope (Advisor or Practice Id) |
 | `SF_OPPORTUNITY_LINK_FIELD` | `AccountId` | Field on Opportunity linking it to the resolved scope |
 | `SF_ADVISOR_NUMBERS` | `17018,34318,34605,21114,20728` | Comma-separated advisor numbers to resolve |
+| `SF_ADVISOR_LOOKUP_FIELD` | *(blank = use `SF_ADVISOR_NUMBER_FIELD`)* | Field to select/scope advisors by, if not the number field -- e.g. `Name`. Use this when `SF_ADVISOR_NUMBER_FIELD` isn't reliably populated on real advisor records in a given org; `SF_ADVISOR_NUMBER_FIELD` is still requested best-effort to populate the `advisor_number` output column, but is no longer required to exist or be populated when a lookup field is set. |
+| `SF_ADVISOR_LOOKUP_VALUES` | *(blank = use `SF_ADVISOR_NUMBERS`)* | Comma-separated values to match against `SF_ADVISOR_LOOKUP_FIELD` (e.g. advisor names). Matching is case-insensitive. |
 | `SF_TASK_SUBJECTS` | `Call,Virtual Meeting` | Comma-separated exact Task Subject filter values |
 | `SF_ACTIVITY_START_DATE` | *(blank = no filter)* | ISO `YYYY-MM-DD`; adds an `ActivityDate >=` filter when set |
 | `SF_EXPECTED_ADVISOR_COUNT` / `_TASK_COUNT` / `_OPPORTUNITY_COUNT` | `5` / `83` / `4` | Expected result counts for validation |

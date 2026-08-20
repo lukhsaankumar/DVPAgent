@@ -65,6 +65,24 @@ def test_migration_recorded_exactly_once(sqlite_db):
     assert [row["version"] for row in applied_after].count(1) == 1
 
 
+def test_migration_0002_adds_salesforce_data_auto(sqlite_db):
+    versions = [row["version"] for row in sqlite_db.applied_migrations()]
+    assert 2 in versions
+    assert "salesforce_data_auto" in sqlite_db.list_tables()
+
+
+def test_salesforce_data_and_salesforce_data_auto_are_independent(sqlite_db):
+    with sqlite_db.write() as conn:
+        conn.execute("INSERT INTO salesforce_data (advisor_name) VALUES ('Legacy Advisor')")
+        conn.execute("INSERT INTO salesforce_data_auto (advisor_name) VALUES ('Auto Advisor')")
+
+    with sqlite_db.read() as conn:
+        legacy_names = [r["advisor_name"] for r in conn.execute("SELECT advisor_name FROM salesforce_data").fetchall()]
+        auto_names = [r["advisor_name"] for r in conn.execute("SELECT advisor_name FROM salesforce_data_auto").fetchall()]
+    assert legacy_names == ["Legacy Advisor"]
+    assert auto_names == ["Auto Advisor"]
+
+
 def test_require_schema_ready_raises_when_tables_missing(tmp_path):
     database = Database(_config(tmp_path / "empty.sqlite3"))
     with pytest.raises(SchemaNotReadyError, match="salesforce_data"):

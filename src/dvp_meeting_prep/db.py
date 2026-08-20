@@ -15,9 +15,10 @@ logger = logging.getLogger("dvp_meeting_prep.db")
 
 MIGRATIONS_DIR = PROJECT_ROOT / "sql" / "migrations"
 
-# The eight logical application tables (see docs/TESTING_GEMINI_SQLITE_MIGRATION.md).
+# The nine logical application tables (see docs/TESTING_GEMINI_SQLITE_MIGRATION.md).
 EXPECTED_TABLES = [
     "salesforce_data",
+    "salesforce_data_auto",
     "tableau_data",
     "consultant_scorecard_data",
     "consultant_scorecard_raw",
@@ -29,6 +30,7 @@ EXPECTED_TABLES = [
 
 EXPECTED_INDEXES = [
     "salesforce_data_advisor_name_idx",
+    "salesforce_data_auto_advisor_name_idx",
     "tableau_data_advisor_name_idx",
     "tableau_data_content_hash_idx",
     "consultant_scorecard_data_advisor_name_idx",
@@ -43,6 +45,16 @@ EXPECTED_INDEXES = [
     "upload_batches_uploaded_at_idx",
     "meeting_prep_documents_advisor_name_idx",
 ]
+
+# ADVISOR_SOURCE_MODE (see config.py) picks which of these the app treats as
+# *the* Salesforce advisor/task table for search and meeting-prep generation
+# -- "legacy" (the manually-provided spreadsheet, DATA_SOURCE=csv) or "auto"
+# (a live Salesforce extraction, DATA_SOURCE=salesforce). Both tables share
+# the exact same columns; only which rows are in them differs.
+SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE = {
+    "legacy": "salesforce_data",
+    "auto": "salesforce_data_auto",
+}
 
 
 class DatabaseError(RuntimeError):

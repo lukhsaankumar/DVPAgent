@@ -13,6 +13,10 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 VALID_DATA_SOURCES = {"salesforce", "csv"}
+# "legacy" = salesforce_data (the manually-provided spreadsheet); "auto" =
+# salesforce_data_auto (a live Salesforce extraction). See db.py's
+# SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE.
+VALID_ADVISOR_SOURCE_MODES = {"legacy", "auto"}
 VALID_APP_ENVS = {"sandbox", "production", "custom"}
 VALID_SF_AUTH_MODES = {"password", "access_token"}
 VALID_LLM_PROVIDERS = {"gemini_enterprise"}
@@ -306,6 +310,7 @@ class Settings:
     sqlite: SQLiteConfig
 
     data_source: str
+    advisor_source_mode: str
     app_env: str
     env_file_used: str
     csv_input_path: str | None
@@ -430,6 +435,12 @@ def get_settings() -> Settings:
     if data_source not in VALID_DATA_SOURCES:
         raise RuntimeError(f"Unsupported DATA_SOURCE: {data_source!r}. Expected one of {sorted(VALID_DATA_SOURCES)}.")
 
+    advisor_source_mode = os.environ.get("ADVISOR_SOURCE_MODE", "legacy").strip().lower() or "legacy"
+    if advisor_source_mode not in VALID_ADVISOR_SOURCE_MODES:
+        raise RuntimeError(
+            f"Unsupported ADVISOR_SOURCE_MODE: {advisor_source_mode!r}. Expected one of {sorted(VALID_ADVISOR_SOURCE_MODES)}."
+        )
+
     app_env = os.environ.get("APP_ENV", "sandbox").strip().lower() or "sandbox"
     if app_env not in VALID_APP_ENVS:
         raise RuntimeError(f"Unsupported APP_ENV: {app_env!r}. Expected one of {sorted(VALID_APP_ENVS)}.")
@@ -440,6 +451,7 @@ def get_settings() -> Settings:
         database_backend=database_backend,
         sqlite=_build_sqlite_config(),
         data_source=data_source,
+        advisor_source_mode=advisor_source_mode,
         app_env=app_env,
         env_file_used=env_file_name,
         csv_input_path=os.environ.get("CSV_INPUT_PATH", "").strip() or None,

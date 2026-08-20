@@ -56,6 +56,7 @@ def _settings(data_source_value: str, csv_input_path: str | None = None) -> Sett
         database_backend="sqlite",
         sqlite=sqlite_config,
         data_source=data_source_value,
+        advisor_source_mode="legacy",
         app_env="sandbox",
         env_file_used=".env",
         csv_input_path=csv_input_path,

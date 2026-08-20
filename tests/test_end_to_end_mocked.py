@@ -30,6 +30,13 @@ def _reset_gemini_client_cache():
     llm.get_gemini_client.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _mock_adc_credentials(monkeypatch):
+    # get_gemini_client() resolves ADC itself (to attach a quota project)
+    # before constructing the client -- never let that hit real ADC here.
+    monkeypatch.setattr(llm, "_resolve_adc_credentials", lambda quota_project_id=None: (object(), "adc-project"))
+
+
 class _FakeResponse:
     def __init__(self, text: str):
         self._text = text

@@ -29,9 +29,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TEXT NOT NULL
 );
 
--- One row per Salesforce Task, denormalized with its Advisor's fields (or one
--- row per .xlsx "WS Team CRM History" line when DATA_SOURCE=csv). Fully
--- replaced on each ingest/extraction run -- see db.py replace_table_atomic().
+-- One row per .xlsx "WS Team CRM History" line -- the "legacy" source,
+-- populated only when DATA_SOURCE=csv. Kept separate from
+-- salesforce_data_auto (below) because the two are pulled from different
+-- places (a manually-provided spreadsheet vs. the live Salesforce API) and
+-- have been found to disagree on which advisors/records exist -- see
+-- salesforce_data_auto's comment. Fully replaced on each ingest run -- see
+-- db.py replace_table_atomic().
 CREATE TABLE IF NOT EXISTS salesforce_data (
   id INTEGER PRIMARY KEY,
   advisor_name TEXT NOT NULL,
@@ -58,6 +62,42 @@ CREATE TABLE IF NOT EXISTS salesforce_data (
 
 CREATE INDEX IF NOT EXISTS salesforce_data_advisor_name_idx
   ON salesforce_data (advisor_name);
+
+-- Same shape as salesforce_data, but populated only from a live Salesforce
+-- extraction (DATA_SOURCE=salesforce, i.e. scripts/salesforce_extract.py or
+-- scripts/ingest_all.py without --source csv). Deliberately a separate
+-- table, not a merge into salesforce_data: the live sandbox and the manual
+-- legacy spreadsheet have been found to disagree on which advisors actually
+-- exist (some accounts in the live org are anonymized/seed data, not real
+-- advisors), so keeping them apart lets ADVISOR_SOURCE_MODE pick one
+-- explicitly instead of silently blending a possibly-unreliable source into
+-- the trusted one. Fully replaced on each live extraction run.
+CREATE TABLE IF NOT EXISTS salesforce_data_auto (
+  id INTEGER PRIMARY KEY,
+  advisor_name TEXT NOT NULL,
+  advisor_number TEXT,
+  task_subtype TEXT,
+  subject TEXT,
+  comments TEXT,
+  interaction_type TEXT,
+  completed_date_time TEXT,
+  district_vp_wholesaling TEXT,
+  pwm TEXT,
+  book_size TEXT,
+  assets_under_management TEXT,
+  new_business_ytd TEXT,
+  created_date TEXT,
+  start_date TEXT,
+  status TEXT,
+  area TEXT,
+  region_office_number TEXT,
+  assigned TEXT,
+  raw_payload TEXT,
+  ingested_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS salesforce_data_auto_advisor_name_idx
+  ON salesforce_data_auto (advisor_name);
 
 -- One row per Tableau export line. Deduplicated on content_hash (a SHA-256 of
 -- the data fields computed in ingest.py) via INSERT ... ON CONFLICT, so

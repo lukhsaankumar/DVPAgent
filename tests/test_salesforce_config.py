@@ -13,6 +13,21 @@ def test_defaults_select_salesforce_and_sandbox(base_env):
     assert settings.salesforce.auth_mode == "password"
 
 
+def test_advisor_source_mode_defaults_to_legacy(base_env):
+    assert get_settings().advisor_source_mode == "legacy"
+
+
+def test_advisor_source_mode_accepts_auto(base_env):
+    base_env.setenv("ADVISOR_SOURCE_MODE", "auto")
+    assert get_settings().advisor_source_mode == "auto"
+
+
+def test_unsupported_advisor_source_mode_raises(base_env):
+    base_env.setenv("ADVISOR_SOURCE_MODE", "both")
+    with pytest.raises(RuntimeError, match="Unsupported ADVISOR_SOURCE_MODE"):
+        get_settings()
+
+
 def test_advisor_numbers_default_to_the_five_business_numbers(base_env):
     settings = get_settings()
     assert settings.salesforce.advisor_numbers == ("17018", "34318", "34605", "21114", "20728")

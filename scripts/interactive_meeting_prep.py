@@ -10,16 +10,17 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from dvp_meeting_prep.db import Database, fetch_all, get_database
+from dvp_meeting_prep.config import get_settings
+from dvp_meeting_prep.db import SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE, Database, fetch_all, get_database
 from dvp_meeting_prep.files import pretty_json, slugify_filename
 from dvp_meeting_prep.query import fetch_all_sources_for_advisor
 from dvp_meeting_prep.prompting import build_meeting_prep_prompt
 from dvp_meeting_prep.llm import close_gemini_client, generate_meeting_prep
 
 
-def sample_advisors(database: Database, limit: int = 5) -> List[str]:
+def sample_advisors(database: Database, salesforce_table: str, limit: int = 5) -> List[str]:
     # try salesforce first, then tableau, then the scorecard mirror
-    for table in ("salesforce_data", "tableau_data", "consultant_scorecard_data"):
+    for table in (salesforce_table, "tableau_data", "consultant_scorecard_data"):
         try:
             with database.read() as conn:
                 rows = fetch_all(conn, f"SELECT DISTINCT advisor_name FROM {table} LIMIT ?", (limit,))
@@ -68,11 +69,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     database = get_database()
-    examples = sample_advisors(database, limit=5)
+    salesforce_table = SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE[get_settings().advisor_source_mode]
+    examples = sample_advisors(database, salesforce_table, limit=5)
     advisor_name = choose_name(examples)
 
     print(f"\nFetching rows for advisor: {advisor_name}\n")
-    source_results = fetch_all_sources_for_advisor(database, advisor_name)
+    source_results = fetch_all_sources_for_advisor(database, advisor_name, salesforce_table=salesforce_table)
 
     for table_name, rows in source_results.items():
         print(f"\n== {table_name} ({len(rows)} rows) ==")

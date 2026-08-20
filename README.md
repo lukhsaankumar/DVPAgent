@@ -435,7 +435,8 @@ historical reference). Summary:
 
 | Table | Written by | Read by |
 | --- | --- | --- |
-| `salesforce_data` | `scripts/ingest_all.py`, `scripts/salesforce_extract.py` (live Salesforce or `.xlsx` fallback, per `DATA_SOURCE`) | advisor search, meeting prep |
+| `salesforce_data` | `scripts/ingest_all.py --source csv` (or `DATA_SOURCE=csv`) -- the manually-provided legacy spreadsheet | advisor search, meeting prep (when `ADVISOR_SOURCE_MODE=legacy`, the default) |
+| `salesforce_data_auto` | `scripts/salesforce_extract.py`, `scripts/ingest_all.py` with `DATA_SOURCE=salesforce` (the default) -- a live Salesforce extraction | advisor search, meeting prep (when `ADVISOR_SOURCE_MODE=auto`) |
 | `tableau_data` | `scripts/ingest_all.py`, `/api/uploads/tableau` | advisor search, meeting prep |
 | `consultant_scorecard_raw` | `scripts/ingest_all.py`, `/api/uploads/consultant-scorecard` | audit trail only |
 | `consultant_scorecard_monthly` | same as above | meeting prep |

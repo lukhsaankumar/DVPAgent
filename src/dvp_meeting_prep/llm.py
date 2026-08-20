@@ -6,6 +6,7 @@ from time import monotonic, sleep
 import logging
 
 from google import genai
+from google.auth import default as _resolve_adc_credentials
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai import types
 from google.genai.errors import APIError
@@ -72,9 +73,27 @@ def get_gemini_client() -> genai.Client:
         gemini.model,
         gemini.api_version,
     )
+    # Resolving credentials ourselves (rather than always letting the SDK do
+    # it lazily) lets a quota project be attached up front -- gcloud-CLI-derived
+    # ADC has none by default, and google-auth prints a "quota exceeded"/"API
+    # not enabled" warning on every request until one is set (it only warns
+    # when quota_project_id is falsy). This is best-effort, though: if ADC
+    # genuinely isn't available yet (e.g. local dev before `gcloud auth
+    # application-default login`), don't let that block the app from
+    # starting -- fall back to constructing the client without explicit
+    # credentials, exactly as before this fix, so the SDK resolves ADC lazily
+    # on the first real request and the actual auth failure surfaces there
+    # (via _classify_error() below) instead of at startup.
+    credentials = None
+    try:
+        credentials, _ = _resolve_adc_credentials(quota_project_id=gemini.project)
+    except DefaultCredentialsError:
+        logger.debug("[LLM] Could not pre-resolve ADC to attach a quota project; deferring to first real request")
+
     try:
         return genai.Client(
             enterprise=True,
+            credentials=credentials,
             project=gemini.project,
             location=gemini.location,
             http_options=types.HttpOptions(

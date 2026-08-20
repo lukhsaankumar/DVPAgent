@@ -110,12 +110,11 @@ def sqlite_db(tmp_path):
 
 @pytest.fixture(autouse=True)
 def _reset_advisor_name_cache():
-    """advisors.py caches the distinct advisor name list at module scope --
-    reset it around every test so one test's data can never leak into
-    another's list_advisor_names()/search_advisor_names() results.
+    """advisors.py caches the distinct advisor name list at module scope
+    (keyed per salesforce_table) -- reset it around every test so one test's
+    data can never leak into another's list_advisor_names()/
+    search_advisor_names() results.
     """
-    advisors_module._cache["names"] = None
-    advisors_module._cache["fetched_at"] = 0.0
+    advisors_module._cache.clear()
     yield
-    advisors_module._cache["names"] = None
-    advisors_module._cache["fetched_at"] = 0.0
+    advisors_module._cache.clear()

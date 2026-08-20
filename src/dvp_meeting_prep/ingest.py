@@ -5,8 +5,10 @@ import hashlib
 import json
 from typing import Any
 
+from .config import get_settings
 from .data_source import load_salesforce_source_data
 from .db import (
+    SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE,
     Database,
     UpsertResult,
     bool_to_int,
@@ -366,14 +368,22 @@ def ingest_all_sources(
     fallback); when DATA_SOURCE=salesforce (the default) advisor/task data is
     pulled from the Salesforce API instead and this path is ignored. See
     data_source.py for the selection logic.
+
+    The two are also kept in *separate* tables (salesforce_data for csv,
+    salesforce_data_auto for a live pull) -- see
+    db.SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE and sql/schema.sql's comments
+    on both tables for why they're not merged.
     """
-    salesforce_rows = load_salesforce_source_data(csv_path=salesforce_path)
+    settings = get_settings()
+    mode = "auto" if settings.data_source == "salesforce" else "legacy"
+    salesforce_table = SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE[mode]
+    salesforce_rows = load_salesforce_source_data(settings, csv_path=salesforce_path)
     tableau_rows = read_tableau_rows(tableau_path)
     scorecard_rows = read_consultant_scorecard_rows(scorecard_path)
     scorecard_counts = ingest_consultant_scorecard_structured(database, scorecard_path, replace_existing=replace_existing)
 
     counts = {
-        "salesforce_data": ingest_rows(database, "salesforce_data", salesforce_rows, replace_existing=replace_existing),
+        salesforce_table: ingest_rows(database, salesforce_table, salesforce_rows, replace_existing=replace_existing),
         "tableau_data": ingest_rows(database, "tableau_data", tableau_rows, replace_existing=replace_existing),
         "consultant_scorecard_data": ingest_rows(
             database,

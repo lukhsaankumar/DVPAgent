@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..advisors import search_advisor_names
 from ..config import get_settings
-from ..db import Database, get_database
+from ..db import SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE, Database, get_database
 from ..docx_export import markdown_to_docx_bytes
 from ..files import slugify_filename
 from ..ingest import ingest_consultant_scorecard_upload, ingest_tableau_upload
@@ -101,8 +101,9 @@ def health() -> dict[str, str]:
 @router.get("/advisors", response_model=AdvisorSearchResponse)
 def get_advisors(q: str = Query(default="", max_length=200), limit: int = Query(default=20, ge=1, le=100)) -> AdvisorSearchResponse:
     database = get_database()
+    salesforce_table = SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE[get_settings().advisor_source_mode]
     try:
-        matches = search_advisor_names(database, q, limit=limit)
+        matches = search_advisor_names(database, q, salesforce_table=salesforce_table, limit=limit)
     except Exception as exc:
         logger.exception("Advisor search failed")
         raise HTTPException(status_code=502, detail=f"Could not search advisors: {exc}") from exc
@@ -174,9 +175,10 @@ def create_meeting_prep(payload: MeetingPrepRequest) -> Response:
 
     settings = get_settings()
     database = get_database()
+    salesforce_table = SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE[settings.advisor_source_mode]
 
     try:
-        source_results = fetch_all_sources_for_advisor(database, advisor_name)
+        source_results = fetch_all_sources_for_advisor(database, advisor_name, salesforce_table=salesforce_table)
     except Exception as exc:
         logger.exception("Failed to fetch source data for advisor %s", advisor_name)
         raise HTTPException(status_code=502, detail=f"Could not fetch advisor data: {exc}") from exc

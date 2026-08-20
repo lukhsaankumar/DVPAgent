@@ -143,11 +143,14 @@ python scripts/salesforce_extract.py
 ```
 
 Same as the dry run, but also writes the resulting rows into the
-`salesforce_data` SQLite table (replacing existing rows, same as the
-CSV-based `scripts/ingest_all.py` always did). This is what "Salesforce is
-the default data source" means in practice -- `scripts/ingest_all.py` calls
-the same underlying pipeline for its Salesforce portion whenever
-`DATA_SOURCE=salesforce` (the default).
+`salesforce_data_auto` SQLite table (replacing existing rows). This is what
+"Salesforce is the default data source" means in practice --
+`scripts/ingest_all.py` calls the same underlying pipeline for its
+Salesforce portion whenever `DATA_SOURCE=salesforce` (the default), also
+writing to `salesforce_data_auto`. The CSV fallback (`DATA_SOURCE=csv`)
+writes to the separate `salesforce_data` table instead -- see
+`ADVISOR_SOURCE_MODE` in `.env.example` for which one the app actually reads
+from when searching for/generating prep on an advisor.
 
 To force the local `.xlsx` fallback instead, either for one run or as your
 default:

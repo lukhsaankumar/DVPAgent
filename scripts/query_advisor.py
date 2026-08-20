@@ -9,7 +9,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from dvp_meeting_prep.db import get_database
+from dvp_meeting_prep.config import get_settings
+from dvp_meeting_prep.db import SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE, get_database
 from dvp_meeting_prep.files import pretty_json
 from dvp_meeting_prep.query import fetch_all_sources_for_advisor
 
@@ -23,7 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     database = get_database()
-    results = fetch_all_sources_for_advisor(database, args.advisor_name)
+    salesforce_table = SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE[get_settings().advisor_source_mode]
+    results = fetch_all_sources_for_advisor(database, args.advisor_name, salesforce_table=salesforce_table)
 
     for table_name, rows in results.items():
         print(f"\n== {table_name} ==")

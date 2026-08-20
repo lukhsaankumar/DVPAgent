@@ -64,14 +64,19 @@ def main() -> None:
 
     result = run_extraction(settings, dry_run=args.dry_run)
 
+    # Always the live table: this script only ever runs a real Salesforce
+    # extraction (never the csv fallback, which writes to salesforce_data via
+    # scripts/ingest_all.py instead) -- see db.SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE.
+    target_table = "salesforce_data_auto"
+
     if args.dry_run:
-        print(f"\n[DRY RUN] Would ingest {len(result.legacy_rows)} rows into salesforce_data (nothing was written).")
+        print(f"\n[DRY RUN] Would ingest {len(result.legacy_rows)} rows into {target_table} (nothing was written).")
         return
 
     database = get_database()
     database.ensure_schema_ready()
-    inserted = ingest_rows(database, "salesforce_data", result.legacy_rows, replace_existing=True)
-    print(f"salesforce_data: {inserted} rows ingested")
+    inserted = ingest_rows(database, target_table, result.legacy_rows, replace_existing=True)
+    print(f"{target_table}: {inserted} rows ingested")
 
 
 if __name__ == "__main__":

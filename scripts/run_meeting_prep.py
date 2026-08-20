@@ -9,7 +9,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from dvp_meeting_prep.db import get_database
+from dvp_meeting_prep.config import get_settings
+from dvp_meeting_prep.db import SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE, get_database
 from dvp_meeting_prep.files import pretty_json
 from dvp_meeting_prep.llm import close_gemini_client, generate_meeting_prep
 from dvp_meeting_prep.prompting import build_meeting_prep_prompt
@@ -30,7 +31,8 @@ def main() -> None:
         raise RuntimeError("Advisor name is required.")
 
     database = get_database()
-    source_results = fetch_all_sources_for_advisor(database, advisor_name)
+    salesforce_table = SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE[get_settings().advisor_source_mode]
+    source_results = fetch_all_sources_for_advisor(database, advisor_name, salesforce_table=salesforce_table)
 
     for table_name, rows in source_results.items():
         print(f"\n== {table_name} ==")

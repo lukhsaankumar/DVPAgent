@@ -4,15 +4,13 @@ from typing import Any
 
 from .db import Database, fetch_all, int_to_bool, json_loads
 
-SOURCE_TABLES = (
-    ("salesforce_data", "advisor_name"),
-    ("tableau_data", "advisor_name"),
-)
-
 # Columns that need converting back from their SQLite storage representation
 # (see db.py's JSON/boolean helpers and ingest.py's _prepare_row_for_insert).
+# salesforce_data and salesforce_data_auto share the exact same columns (see
+# sql/schema.sql), so both need the same raw_payload handling.
 _JSON_COLUMNS_BY_TABLE: dict[str, tuple[str, ...]] = {
     "salesforce_data": ("raw_payload",),
+    "salesforce_data_auto": ("raw_payload",),
     "tableau_data": ("raw_payload",),
     "consultant_scorecard_monthly": ("raw_payload",),
 }
@@ -55,12 +53,21 @@ def fetch_rows_for_advisor(database: Database, table_name: str, advisor_name: st
     return [_deserialize_row(table_name, row) for row in rows]
 
 
-def fetch_all_sources_for_advisor(database: Database, advisor_name: str) -> dict[str, list[dict[str, Any]]]:
+def fetch_all_sources_for_advisor(
+    database: Database, advisor_name: str, *, salesforce_table: str = "salesforce_data"
+) -> dict[str, list[dict[str, Any]]]:
+    """`salesforce_table` picks which of the two Salesforce tables (see
+    db.SALESFORCE_TABLE_BY_ADVISOR_SOURCE_MODE) to pull from -- always a
+    hardcoded constant from that mapping, never request input. The returned
+    dict always uses the stable key "salesforce_data" regardless of which
+    physical table the rows actually came from -- prompting.py and other
+    callers depend on that key name, not on which mode was active.
+    """
     base_results = {
-        table_name: fetch_rows_for_advisor(database, table_name, advisor_name, column_name)
-        for table_name, column_name in SOURCE_TABLES
+        "salesforce_data": fetch_rows_for_advisor(database, salesforce_table, advisor_name, "advisor_name"),
+        "tableau_data": fetch_rows_for_advisor(database, "tableau_data", advisor_name, "advisor_name"),
     }
-    base_results.update(fetch_consultant_scorecard_for_advisor(database, advisor_name))
+    base_results.update(fetch_consultant_scorecard_for_advisor(database, advisor_name, salesforce_table=salesforce_table))
     return base_results
 
 
@@ -81,9 +88,9 @@ def _advisor_name_variants(advisor_name: str) -> list[str]:
     return dedup
 
 
-def _advisor_numbers_from_other_sources(database: Database, advisor_name: str) -> list[str]:
+def _advisor_numbers_from_other_sources(database: Database, advisor_name: str, *, salesforce_table: str) -> list[str]:
     numbers: list[str] = []
-    sf_rows = fetch_rows_for_advisor(database, "salesforce_data", advisor_name, "advisor_name")
+    sf_rows = fetch_rows_for_advisor(database, salesforce_table, advisor_name, "advisor_name")
     for row in sf_rows:
         value = row.get("advisor_number")
         if value is not None:
@@ -104,7 +111,9 @@ def _advisor_numbers_from_other_sources(database: Database, advisor_name: str) -
     return numbers
 
 
-def fetch_consultant_scorecard_for_advisor(database: Database, advisor_name: str) -> dict[str, list[dict[str, Any]]]:
+def fetch_consultant_scorecard_for_advisor(
+    database: Database, advisor_name: str, *, salesforce_table: str = "salesforce_data"
+) -> dict[str, list[dict[str, Any]]]:
     monthly_rows: list[dict[str, Any]] = []
     for variant in _advisor_name_variants(advisor_name):
         monthly_rows = fetch_rows_for_advisor(database, "consultant_scorecard_monthly", variant, "advisor_name")
@@ -112,7 +121,7 @@ def fetch_consultant_scorecard_for_advisor(database: Database, advisor_name: str
             break
 
     if not monthly_rows:
-        for advisor_number in _advisor_numbers_from_other_sources(database, advisor_name):
+        for advisor_number in _advisor_numbers_from_other_sources(database, advisor_name, salesforce_table=salesforce_table):
             monthly_rows = fetch_rows_for_advisor(database, "consultant_scorecard_monthly", advisor_number, "advisor_number")
             if monthly_rows:
                 break

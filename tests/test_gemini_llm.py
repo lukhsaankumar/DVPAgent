@@ -17,6 +17,27 @@ def _reset_gemini_client_cache():
     llm.get_gemini_client.cache_clear()
 
 
+class _FakeCredentials:
+    """Stand-in for google.auth.credentials.Credentials -- never a real ADC lookup in tests."""
+
+
+def _fake_adc(quota_project_id=None):
+    _fake_adc.captured_quota_project_id = quota_project_id
+    return _FakeCredentials(), "adc-project"
+
+
+_fake_adc.captured_quota_project_id = None
+
+
+@pytest.fixture(autouse=True)
+def _mock_adc_credentials(monkeypatch):
+    """Every test in this file goes through get_gemini_client(), which now
+    resolves ADC itself (to attach a quota project) before constructing the
+    client -- mock that resolution so no test ever touches real ADC.
+    """
+    monkeypatch.setattr(llm, "_resolve_adc_credentials", _fake_adc)
+
+
 class FakeResponse:
     def __init__(self, text: str = "Generated Markdown", finish_reason: str | None = "STOP", usage: object | None = None):
         self._text = text
@@ -108,13 +129,47 @@ def test_client_has_no_api_key_kwarg(base_env, monkeypatch):
     assert "api_key" not in factory.captured
 
 
-def test_default_credentials_error_raises_gemini_auth_error(base_env, monkeypatch):
-    def factory(**kwargs):
+def test_adc_preresolution_failure_does_not_block_client_construction(base_env, monkeypatch):
+    # Pre-resolving ADC to attach a quota project is best-effort -- if ADC
+    # genuinely isn't available yet (e.g. local dev before `gcloud auth
+    # application-default login`), that must not stop the app from starting.
+    # The real auth failure surfaces later, at the first actual generation
+    # call (_classify_error() converts it to GeminiAuthError there), not here.
+    def raise_no_adc(quota_project_id=None):
         raise DefaultCredentialsError("no ADC found")
+
+    monkeypatch.setattr(llm, "_resolve_adc_credentials", raise_no_adc)
+    factory = _fake_client_factory()
+    monkeypatch.setattr(llm.genai, "Client", factory)
+    llm.get_gemini_client()  # must not raise
+    assert factory.captured["credentials"] is None
+
+
+def test_client_construction_failure_still_raises_gemini_auth_error(base_env, monkeypatch):
+    def factory(**kwargs):
+        raise DefaultCredentialsError("client construction failed")
 
     monkeypatch.setattr(llm.genai, "Client", factory)
     with pytest.raises(llm.GeminiAuthError):
         llm.get_gemini_client()
+
+
+def test_client_resolves_adc_with_quota_project_to_silence_warning(base_env, monkeypatch):
+    # google-auth only prints its "quota exceeded"/"API not enabled" warning
+    # when quota_project_id is falsy -- passing the configured project here
+    # is what suppresses it (see google.auth._default._apply_quota_project_id).
+    base_env.setenv("GOOGLE_CLOUD_PROJECT", "proj-123")
+    factory = _fake_client_factory()
+    monkeypatch.setattr(llm.genai, "Client", factory)
+    llm.get_gemini_client()
+    assert _fake_adc.captured_quota_project_id == "proj-123"
+
+
+def test_client_receives_resolved_adc_credentials(base_env, monkeypatch):
+    factory = _fake_client_factory()
+    monkeypatch.setattr(llm.genai, "Client", factory)
+    llm.get_gemini_client()
+    assert isinstance(factory.captured["credentials"], _FakeCredentials)
 
 
 def test_client_is_cached_across_calls(base_env, monkeypatch):

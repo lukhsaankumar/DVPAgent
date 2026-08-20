@@ -28,9 +28,22 @@ def _fetch_distinct_advisor_names(database: Database, table_name: str) -> set[st
 
 
 def _load_all_advisor_names(database: Database) -> list[str]:
-    names: set[str] = set()
+    """Dedupe case-insensitively, not just exact-string: real Salesforce data
+    stores "First Last" while real Tableau exports store "FIRST LAST" (all
+    caps), so the same advisor's name differs in casing between sources. A
+    plain set() union treats those as two different people and lists the
+    same advisor twice. ADVISOR_SOURCE_TABLES order (salesforce_data first)
+    decides which casing wins when both exist.
+    """
+    seen_casefold: set[str] = set()
+    names: list[str] = []
     for table_name in ADVISOR_SOURCE_TABLES:
-        names.update(_fetch_distinct_advisor_names(database, table_name))
+        for name in sorted(_fetch_distinct_advisor_names(database, table_name)):
+            key = name.casefold()
+            if key in seen_casefold:
+                continue
+            seen_casefold.add(key)
+            names.append(name)
     return sorted(names, key=str.casefold)
 
 

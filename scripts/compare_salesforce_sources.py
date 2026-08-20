@@ -12,6 +12,14 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+# Windows PowerShell consoles often default stdout to the system codepage
+# rather than UTF-8, which garbles accented characters (e.g. French advisor
+# names) into '?'/'�'. Real advisor/company data can contain these, so make
+# the console safe for them -- the JSON dump file already writes UTF-8
+# regardless, this only affects what prints to the terminal.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from dvp_meeting_prep.config import PROJECT_ROOT, configure_logging, get_settings
 from dvp_meeting_prep.files import read_salesforce_rows
 from dvp_meeting_prep.salesforce import client as sf_client

@@ -43,6 +43,36 @@ def _write_scorecard_workbook(path: Path, *, advisor_number: str, advisor_name: 
     return path
 
 
+def test_cross_table_advisor_match_is_case_insensitive(sqlite_db):
+    # Real Salesforce data stores "First Last"; real Tableau exports store
+    # "FIRST LAST" (all caps) for the same advisor. An exact-case match
+    # would silently return zero Tableau rows -- discovered against real
+    # ingested data, not the dummy sample files (which happened to use
+    # consistent casing across sources).
+    ingest_rows(sqlite_db, "salesforce_data", [{"advisor_name": "Aaron Brant"}])
+    ingest_rows(sqlite_db, "tableau_data", [{"advisor_name": "AARON BRANT", "content_hash": "h1"}])
+
+    result = fetch_all_sources_for_advisor(sqlite_db, "Aaron Brant")
+    assert len(result["salesforce_data"]) == 1
+    assert len(result["tableau_data"]) == 1  # would be 0 without COLLATE NOCASE
+
+    # Works regardless of the casing of the search input too.
+    result_lower = fetch_all_sources_for_advisor(sqlite_db, "aaron brant")
+    assert len(result_lower["tableau_data"]) == 1
+
+
+def test_list_advisor_names_dedupes_same_advisor_across_casing(sqlite_db):
+    # Same real-world scenario as above: without case-insensitive dedup,
+    # "Aaron Brant" (salesforce) and "AARON BRANT" (tableau) show up as two
+    # separate entries in the advisor search dropdown for one real person.
+    ingest_rows(sqlite_db, "salesforce_data", [{"advisor_name": "Aaron Brant"}])
+    ingest_rows(sqlite_db, "tableau_data", [{"advisor_name": "AARON BRANT", "content_hash": "h1"}])
+
+    names = list_advisor_names(sqlite_db, force_refresh=True)
+    assert names.count("Aaron Brant") + names.count("AARON BRANT") == 1  # exactly one entry, not two
+    assert "Aaron Brant" in names  # salesforce_data's casing wins (ADVISOR_SOURCE_TABLES order)
+
+
 def test_search_advisor_names_is_case_insensitive_prefix_match(sqlite_db):
     ingest_rows(sqlite_db, "salesforce_data", [{"advisor_name": "Avery Benton"}, {"advisor_name": "Casey Diaz"}])
 

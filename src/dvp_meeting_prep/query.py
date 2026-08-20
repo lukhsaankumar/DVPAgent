@@ -38,11 +38,18 @@ def fetch_rows_for_advisor(database: Database, table_name: str, advisor_name: st
     safe -- SQL identifiers can't be bound as `?` parameters anyway.
     `advisor_name` (the one value that can come from a user/API caller) is
     always passed as a parameter.
+
+    Matched case-insensitively: real Salesforce data stores "First Last"
+    while real Tableau exports store "FIRST LAST" (all caps) -- an exact
+    match would silently return zero rows for every Tableau lookup. The
+    sample/dummy data used for earlier testing happened to use consistent
+    casing across sources, which is why this didn't surface until testing
+    against real data.
     """
     with database.read() as conn:
         rows = fetch_all(
             conn,
-            f"SELECT * FROM {table_name} WHERE {column_name} = ? ORDER BY ingested_at DESC",
+            f"SELECT * FROM {table_name} WHERE {column_name} = ? COLLATE NOCASE ORDER BY ingested_at DESC",
             (advisor_name,),
         )
     return [_deserialize_row(table_name, row) for row in rows]

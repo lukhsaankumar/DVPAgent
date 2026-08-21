@@ -6,12 +6,15 @@ from typing import Any
 import json
 import logging
 
+from simple_salesforce.exceptions import SalesforceError
+
 from ..config import PROJECT_ROOT, Settings, get_settings
 from . import client as sf_client
 from . import metadata
 from . import normalize as sf_normalize
 from . import queries as sf_queries
 from . import validate as sf_validate
+from .errors import SalesforceQueryError
 
 logger = logging.getLogger("dvp_meeting_prep.salesforce")
 
@@ -68,7 +71,14 @@ def run_extraction(settings: Settings | None = None, *, dry_run: bool = False) -
     scope = sf_queries.resolve_scope(advisor_records, sf_config)
 
     if sf_config.debug and scope.scope_ids:
-        sf_queries.audit_task_subjects(client, scope.scope_ids, sf_config)
+        # Debug-only logging (subject counts) -- must never abort a real
+        # extraction. Some orgs' Task.Subject field type can't be used in a
+        # SOQL GROUP BY (Salesforce rejects it as MALFORMED_QUERY), which is
+        # unrelated to whether the actual Task/Opportunity fetch below works.
+        try:
+            sf_queries.audit_task_subjects(client, scope.scope_ids, sf_config)
+        except (SalesforceError, SalesforceQueryError) as exc:
+            logger.warning("[TASKS] Subject audit skipped (debug-only, non-fatal): %s", exc)
 
     if scope.scope_ids:
         task_records = sf_queries.fetch_tasks(client, task_described, scope.scope_ids, sf_config)
